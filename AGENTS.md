@@ -25,3 +25,16 @@ Conventions specific to this challenge:
   startup rather than the offending edit.
 - Absent publication fields pass. `publication-match` treats a missing property as a failure, which would
   reject every vote. Do not copy that.
+
+Releasing:
+
+- Releases are automatic. A push to `master` runs CI, and on success `release.yml` runs release-it, which
+  bumps the version from the conventional-commit types, tags it, cuts a GitHub release, and publishes to
+  npm with provenance.
+- Publishing authenticates with npm trusted publishing (OIDC), not a token. There is no `NPM_TOKEN`
+  secret, which is why `release.yml` needs `id-token: write` and why the npm CLI is pinned to `npm@11`.
+- Bootstrapping that is a chicken-and-egg: a trusted publisher is configured under npm's *package*
+  settings, so the package has to exist first. The first version was published by hand and has no
+  provenance attestation. Every version after it is signed by CI.
+- Never publish by hand once the trusted publisher is configured. A manual publish produces a version
+  with no attestation, and the version numbering comes from release-it.
