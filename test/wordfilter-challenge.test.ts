@@ -12,7 +12,7 @@ import type {
 } from "../src/types.js";
 
 const DEFAULT_RULES: WordfilterRule[] = [
-  { src: "plebbit", dst: "bitcoin" },
+  { src: "cloud", dst: "butt" },
   { src: "spamword", dst: "" }
 ];
 
@@ -100,33 +100,33 @@ describe("the challenge file", () => {
 
 describe("getChallenge", () => {
   it("rejects a publication that still contains a filtered word", async () => {
-    const result = await runWithRules({ content: "I love plebbit" });
+    const result = await runWithRules({ content: "I love the cloud" });
     expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
   });
 
   it("accepts a publication with the replacements already applied", async () => {
-    const content = applyWordfilters("I love plebbit", DEFAULT_RULES);
+    const content = applyWordfilters("I love the cloud", DEFAULT_RULES);
     const result = await runWithRules({ content });
     expect(result).toEqual({ success: true });
   });
 
   it("matches case-insensitively", async () => {
-    for (const content of ["PLEBBIT", "Plebbit", "pLeBbIt"]) {
+    for (const content of ["CLOUD", "Cloud", "cLoUd"]) {
       expect(await runWithRules({ content })).toEqual({ success: false, error: DEFAULT_ERROR });
     }
   });
 
   it("matches a filtered word inside a larger word", async () => {
-    const result = await runWithRules({ content: "antiplebbitism" });
+    const result = await runWithRules({ content: "cloudflare" });
     expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
   });
 
   it("checks title and author.displayName by default", async () => {
-    expect(await runWithRules({ title: "plebbit good" })).toEqual({
+    expect(await runWithRules({ title: "cloud good" })).toEqual({
       success: false,
       error: DEFAULT_ERROR
     });
-    expect(await runWithRules({ author: { displayName: "plebbit fan" } })).toEqual({
+    expect(await runWithRules({ author: { displayName: "cloud fan" } })).toEqual({
       success: false,
       error: DEFAULT_ERROR
     });
@@ -134,16 +134,16 @@ describe("getChallenge", () => {
 
   it("uses the owner's error message when set", async () => {
     const error = "This board replaces certain words.";
-    const result = await runWithRules({ content: "plebbit" }, DEFAULT_RULES, { error });
+    const result = await runWithRules({ content: "cloud" }, DEFAULT_RULES, { error });
     expect(result).toEqual({ success: false, error });
   });
 
   it("checks only the configured fieldNames", async () => {
     const fieldNames = JSON.stringify(["title"]);
-    expect(await runWithRules({ content: "plebbit" }, DEFAULT_RULES, { fieldNames })).toEqual({
+    expect(await runWithRules({ content: "cloud" }, DEFAULT_RULES, { fieldNames })).toEqual({
       success: true
     });
-    expect(await runWithRules({ title: "plebbit" }, DEFAULT_RULES, { fieldNames })).toEqual({
+    expect(await runWithRules({ title: "cloud" }, DEFAULT_RULES, { fieldNames })).toEqual({
       success: false,
       error: DEFAULT_ERROR
     });
@@ -152,7 +152,7 @@ describe("getChallenge", () => {
   it("resolves dot-notation paths of any depth", async () => {
     const fieldNames = JSON.stringify(["author.displayName"]);
     expect(
-      await runWithRules({ author: { displayName: "plebbit" } }, DEFAULT_RULES, { fieldNames })
+      await runWithRules({ author: { displayName: "cloud" } }, DEFAULT_RULES, { fieldNames })
     ).toEqual({ success: false, error: DEFAULT_ERROR });
   });
 
@@ -174,7 +174,7 @@ describe("getChallenge", () => {
     it("passes when a path resolves to a non-string", async () => {
       const fieldNames = JSON.stringify(["author"]);
       expect(
-        await runWithRules({ author: { displayName: "plebbit" } }, DEFAULT_RULES, { fieldNames })
+        await runWithRules({ author: { displayName: "cloud" } }, DEFAULT_RULES, { fieldNames })
       ).toEqual({ success: true });
     });
   });
@@ -184,20 +184,20 @@ describe("getChallenge", () => {
       const result = await runChallenge({
         settings: buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES) }),
         publicationType,
-        publication: { content: "plebbit" }
+        publication: { content: "cloud" }
       });
       expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
     }
   });
 
   it("passes when the rule set is empty", async () => {
-    expect(await runWithRules({ content: "plebbit" }, [])).toEqual({ success: true });
+    expect(await runWithRules({ content: "cloud" }, [])).toEqual({ success: true });
   });
 
   it("passes when wordfilters is not set at all", async () => {
     const result = await runChallenge({
       settings: buildSettings({}),
-      publication: { content: "plebbit" }
+      publication: { content: "cloud" }
     });
     expect(result).toEqual({ success: true });
   });
@@ -277,7 +277,7 @@ describe("validateChallengeSettings", () => {
 
   it("rejects wordfilters that is not an array of objects", () => {
     expectRejected(buildSettings({ wordfilters: '{"src":"a","dst":"b"}' }), /must be a JSON array/);
-    expectRejected(buildSettings({ wordfilters: '["plebbit"]' }), /wordfilters\[0\] must be an object/);
+    expectRejected(buildSettings({ wordfilters: '["cloud"]' }), /wordfilters\[0\] must be an object/);
     expectRejected(buildSettings({ wordfilters: '[{"dst":"b"}]' }), /wordfilters\[0\]\.src must be a string/);
     expectRejected(buildSettings({ wordfilters: '[{"src":"a"}]' }), /wordfilters\[0\]\.dst must be a string/);
   });

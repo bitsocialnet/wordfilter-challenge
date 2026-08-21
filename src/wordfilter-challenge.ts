@@ -26,7 +26,7 @@ const optionInputs: NonNullable<ChallengeFileInput["optionInputs"]> = [
     default: "[]",
     description:
       "JSON array of {src, dst} replacements, applied in array order, cascading. Matched literally and case-insensitively. Must be listed in publicOptions so publishing clients can read and apply it.",
-    placeholder: '[{"src":"plebbit","dst":"bitcoin"},{"src":"spamword","dst":""}]',
+    placeholder: '[{"src":"cloud","dst":"butt"},{"src":"spamword","dst":""}]',
     required: true
   },
   {

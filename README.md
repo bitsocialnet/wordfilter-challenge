@@ -6,7 +6,7 @@ A [pkc-js](https://github.com/pkcprotocol/pkc-js) challenge that makes community
 
 ## What it does
 
-A community configures a list of replacements, for example `plebbit` becomes `bitcoin`. Publishing clients apply those replacements before signing, so the signed comment, its CID, and what every client renders all contain `bitcoin`. The original text does not exist anywhere.
+A community configures a list of replacements, for example `cloud` becomes `butt`. Publishing clients apply those replacements before signing, so the signed comment, its CID, and what every client renders all contain `butt`. The original text does not exist anywhere.
 
 The community node does not do the replacing. It only checks: if a publication still contains a filtered word, it is rejected.
 
@@ -128,7 +128,7 @@ bitsocial challenge install @bitsocial/wordfilter-challenge
 ```bash
 bitsocial community edit your-community.bso \
   '--settings.challenges[0].name' @bitsocial/wordfilter-challenge \
-  '--settings.challenges[0].options.wordfilters' '[{"src":"plebbit","dst":"bitcoin"}]' \
+  '--settings.challenges[0].options.wordfilters' '[{"src":"cloud","dst":"butt"}]' \
   '--settings.challenges[0].publicOptions[0]' wordfilters
 ```
 
@@ -167,7 +167,8 @@ await community.edit({
                 name: "@bitsocial/wordfilter-challenge",
                 options: {
                     wordfilters: JSON.stringify([
-                        { src: "plebbit", dst: "bitcoin" },
+                        { src: "cloud", dst: "butt" },
+                        { src: "millennials", dst: "snake people" },
                         { src: "spamword", dst: "" }
                     ]),
                     fieldNames: JSON.stringify(["content", "title", "author.displayName"]),
@@ -211,13 +212,13 @@ The `dst` containing `src` rule is what guarantees the client's loop terminates.
 ## Matching semantics
 
 - **Literal, never regex.** vichan supports arbitrary PCRE, but only because its config is a server-local file the operator wrote. Here the rules ship inside a signed record that every browser client downloads and executes, so patterns are literal strings.
-- **Case-insensitive**, following vichan's `str_ireplace`. `plebbit`, `Plebbit`, and `PLEBBIT` are all replaced. Casing is not preserved: all three become `bitcoin`.
+- **Case-insensitive**, following vichan's `str_ireplace`. `cloud`, `Cloud`, and `CLOUD` are all replaced. Casing is not preserved: all three become `butt`.
 - **Cascading in array order**, and rules from multiple wordfilter challenges compose in challenge order.
 - **Absent fields pass cleanly.** A vote has no `content`, and that is not a failure. (`publication-match` treats a missing property as a failure, which would reject every vote. Do not copy that.)
 
 ## What this does not catch
 
-Deliberate evasion. `p l e b b i t`, `plebbıt`, and zero-width-joined variants pass straight through.
+Deliberate evasion. `c l o u d`, `clοud` (with a Greek omicron), and zero-width-joined variants pass straight through.
 
 That is a hard limit, not an oversight. jschan has a `strictFiltering` mode that matches against NFD-stripped, zero-width-stripped and alphanumeric-only permutations of the post, and it is necessarily **detect-only**: normalisation is not invertible, so once you have matched a normalised form you no longer know where in the original text to splice a replacement. Evasion-resistant matching and replacement are mutually exclusive.
 

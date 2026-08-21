@@ -10,14 +10,14 @@ describe("escapeRegExp", () => {
 });
 
 describe("applyWordfilters", () => {
-  const rules: WordfilterRule[] = [{ src: "plebbit", dst: "bitcoin" }];
+  const rules: WordfilterRule[] = [{ src: "cloud", dst: "butt" }];
 
   it("replaces every occurrence", () => {
-    expect(applyWordfilters("plebbit and plebbit", rules)).toBe("bitcoin and bitcoin");
+    expect(applyWordfilters("cloud and cloud", rules)).toBe("butt and butt");
   });
 
   it("replaces case-insensitively without preserving casing", () => {
-    expect(applyWordfilters("Plebbit PLEBBIT plebbit", rules)).toBe("bitcoin bitcoin bitcoin");
+    expect(applyWordfilters("Cloud CLOUD cloud", rules)).toBe("butt butt butt");
   });
 
   it("deletes the match when dst is empty", () => {
@@ -55,7 +55,7 @@ describe("applyWordfilters", () => {
   });
 
   it("returns the input untouched when there are no rules", () => {
-    expect(applyWordfilters("plebbit", [])).toBe("plebbit");
+    expect(applyWordfilters("cloud", [])).toBe("cloud");
   });
 
   it("throws when the rules never stabilise", () => {
@@ -76,7 +76,7 @@ describe("applyWordfilters", () => {
   });
 
   it("produces output the community accepts, containing no src", () => {
-    const filtered = applyWordfilters("Plebbit is plebbit", rules);
+    const filtered = applyWordfilters("Cloud is cloud", rules);
     for (const { src } of rules) {
       expect(filtered.toLowerCase()).not.toContain(src.toLowerCase());
     }
