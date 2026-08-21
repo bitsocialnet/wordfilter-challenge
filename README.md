@@ -1,6 +1,6 @@
 # @bitsocial/wordfilter-challenge
 
-A [pkc-js](https://github.com/pkcprotocol/pkc-js) challenge that makes community wordfilters a real rule instead of a cosmetic display filter.
+A [pkc-js](https://github.com/pkcprotocol/pkc-js) challenge that makes community wordfilters a real rule instead of a cosmetic display filter. It implements the [`wordfilter/v1` contract](#the-wordfilterv1-contract), which is what publishing clients actually code against.
 
 > **Status: implemented.** This README is the spec, and `src/` follows it. Tracked in [pkc-js#281](https://github.com/pkcprotocol/pkc-js/issues/281).
 
@@ -22,28 +22,49 @@ So the replacement has to happen on the side holding the signing key, which is t
 
 A client that does not implement the replacement cannot publish unfiltered text. It simply gets rejected, which is the intended failure mode.
 
+## The `wordfilter/v1` contract
+
+A publishing client has to recognise "this community wants word replacements applied before I sign" from the published community record alone. The record deliberately does not say which challenge produced it: `path`, `name` and `options` are all stripped when `community.settings.challenges[i]` becomes the public `community.challenges[i]`. Only `publicOptions`, the subset the owner opted into publishing, survives.
+
+So the signal a client keys off is an option key that names a **contract** rather than a package:
+
+| Public option | Required | Meaning |
+|---|---|---|
+| `wordfilter/v1/rules` | yes | JSON array of `{ src, dst }`. Its presence is what identifies the contract |
+| `wordfilter/v1/fieldNames` | no | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
+
+This package is one implementation. Anything that publishes `wordfilter/v1/rules` with the semantics below claims the contract, and a client written against it keeps working with implementations that did not exist when the client was written. Keying on a package name instead, whether through a hardcoded `@bitsocial/wordfilter-challenge` or a generic `wordfilters` option, would enshrine one implementation in every UI and lock out every fork, competitor and in-house variant that behaves identically. See [issue #1](https://github.com/bitsocialnet/wordfilter-challenge/issues/1).
+
+The namespace covers exactly what a publishing client must read, and nothing else. `error` is not in it, because no client reads `error`: the community returns it in the rejection. An implementation is free to name or shape that option however it likes.
+
+`wordfilter/v2/rules` would be a different key. A client that understands both reads both, and a community can publish both during a transition without either side guessing.
+
 ## For UI client developers
 
-This is the section that matters if you are building a frontend that publishes to communities using this challenge.
+This is the section that matters if you are building a frontend that publishes to communities using this contract.
 
 ### 1. Read the rules off the community
 
-The rules are published in the community record, in the challenge's `publicOptions`. Collect them from every wordfilter challenge the community has configured, in challenge order.
-
-The challenge's `name` is **not** in the published record: `path`, `name` and `options` are all stripped when `community.settings.challenges[i]` becomes `community.challenges[i]`. The presence of a `wordfilters` public option is the only thing a client can key off, which is exactly why the challenge requires it to be published.
+Collect the rules from every challenge on the community that publishes `wordfilter/v1/rules`, in challenge order. A community may have more than one.
 
 ```js
+const isRule = (rule) => typeof rule?.src === "string" && typeof rule?.dst === "string";
+const isFieldName = (name) => typeof name === "string";
+
 function getWordfilterConfigs(community) {
     return (community.challenges ?? [])
-        .filter((challenge) => challenge.publicOptions?.wordfilters)
+        .filter((challenge) => challenge.publicOptions?.["wordfilter/v1/rules"])
         .map((challenge) => {
             try {
-                return {
-                    rules: JSON.parse(challenge.publicOptions.wordfilters),
-                    fieldNames: challenge.publicOptions.fieldNames
-                        ? JSON.parse(challenge.publicOptions.fieldNames)
-                        : ["content", "title", "author.displayName"]
-                };
+                const rules = JSON.parse(challenge.publicOptions["wordfilter/v1/rules"]);
+                const fieldNames = challenge.publicOptions["wordfilter/v1/fieldNames"]
+                    ? JSON.parse(challenge.publicOptions["wordfilter/v1/fieldNames"])
+                    : ["content", "title", "author.displayName"];
+                // JSON.parse is happy to hand back null, an object or an array of numbers, and
+                // applyWordfilters would throw on any of them. Treat the wrong shape like bad JSON.
+                if (!Array.isArray(rules) || !rules.every(isRule)) return undefined;
+                if (!Array.isArray(fieldNames) || !fieldNames.every(isFieldName)) return undefined;
+                return { rules, fieldNames };
             } catch {
                 // A rule set you cannot parse is skipped, never fatal. Worst case the community
                 // rejects the publication with a readable error.
@@ -54,7 +75,9 @@ function getWordfilterConfigs(community) {
 }
 ```
 
-Skip anything you cannot parse. Never throw, and never refuse to load the community: a malformed rule set must cost the filter, not the whole board.
+Note what this function does not do: it never looks at which challenge implementation produced the options, because the record does not say and it does not need to.
+
+Skip anything you cannot parse, and anything that parses to the wrong shape. Never throw, and never refuse to load the community: a malformed rule set must cost the filter, not the whole board. This package's own `validateChallengeSettings` will not let a community publish a malformed rule set, but the contract is open to other implementations and your client cannot know which one it is talking to.
 
 ### 2. Apply the rules, looping until the text stops changing
 
@@ -91,15 +114,27 @@ Filter the text before it reaches `pkc.createComment()`, so the transformation h
 
 ```js
 const configs = getWordfilterConfigs(community);
-for (const { rules, fieldNames } of configs) {
-    if (fieldNames.includes("content") && content) content = applyWordfilters(content, rules);
-    if (fieldNames.includes("title") && title) title = applyWordfilters(title, rules);
-}
-const comment = await pkc.createComment({ content, title, communityAddress, signer });
+
+// One call per field, carrying the rules of every challenge that covers that field. Do not apply the
+// challenges one at a time: a later challenge's replacement can reintroduce an earlier challenge's
+// src, and the earlier challenge would then reject the publication. The loop inside applyWordfilters
+// only sees that interaction when both rule sets are in the same call.
+const rulesFor = (fieldName) =>
+    configs.filter(({ fieldNames }) => fieldNames.includes(fieldName)).flatMap(({ rules }) => rules);
+
+if (content) content = applyWordfilters(content, rulesFor("content"));
+if (title) title = applyWordfilters(title, rulesFor("title"));
+if (displayName) displayName = applyWordfilters(displayName, rulesFor("author.displayName"));
+
+const comment = await pkc.createComment({ content, title, author: { displayName }, communityAddress, signer });
 await comment.publish();
 ```
 
-`fieldNames` entries are dot-notation paths on the publication, the same convention `publication-match` uses for `propertyName`. So `content` covers both a comment and a comment edit without the config naming publication types.
+Those three fields are the defaults, so they are the minimum. If a community publishes other paths in `wordfilter/v1/fieldNames`, run the same call on whatever your client puts at those paths; the community checks exactly the configured paths and nothing else, so an unfiltered custom field is a rejection just like an unfiltered display name.
+
+The `wordfilter/v1/fieldNames` entries are dot-notation paths on the publication, the same convention `publication-match` uses for `propertyName`. So `content` covers both a comment and a comment edit without the config naming publication types.
+
+Two challenges on the same community whose rules undo each other, `foo → bar` in one and `bar → foo` in another, cannot be caught by either challenge's `validateChallengeSettings`, which sees only its own settings. The merged call then either throws `did not stabilise` or settles on text that one of the challenges still rejects, and the community returns that challenge's `error`. Both are the right outcome: no text containing either word can satisfy both challenges, so the board is misconfigured and the owner has to fix it. Handle it the same way as any other rejection, in step 5.
 
 ### 4. Show the user what happened
 
@@ -128,8 +163,8 @@ bitsocial challenge install @bitsocial/wordfilter-challenge
 ```bash
 bitsocial community edit your-community.bso \
   '--settings.challenges[0].name' @bitsocial/wordfilter-challenge \
-  '--settings.challenges[0].options.wordfilters' '[{"src":"cloud","dst":"butt"}]' \
-  '--settings.challenges[0].publicOptions[0]' wordfilters
+  '--settings.challenges[0].options.wordfilter/v1/rules' '[{"src":"cloud","dst":"butt"}]' \
+  '--settings.challenges[0].publicOptions[0]' wordfilter/v1/rules
 ```
 
 ### With pkc-js over RPC
@@ -166,48 +201,66 @@ await community.edit({
             {
                 name: "@bitsocial/wordfilter-challenge",
                 options: {
-                    wordfilters: JSON.stringify([
+                    "wordfilter/v1/rules": JSON.stringify([
                         { src: "cloud", dst: "butt" },
                         { src: "millennials", dst: "snake people" },
                         { src: "spamword", dst: "" }
                     ]),
-                    fieldNames: JSON.stringify(["content", "title", "author.displayName"]),
+                    "wordfilter/v1/fieldNames": JSON.stringify([
+                        "content",
+                        "title",
+                        "author.displayName"
+                    ]),
                     error: "This board replaces certain words. Please repost with the replacements applied."
                 },
-                publicOptions: ["wordfilters", "fieldNames", "error"]
+                publicOptions: ["wordfilter/v1/rules", "wordfilter/v1/fieldNames", "error"]
             }
         ]
     }
 });
 ```
 
-`publicOptions` is **required**, not decorative. Options are private by default in pkc-js, and a client that cannot read the rules cannot satisfy them. The challenge's `validateChallengeSettings` hook rejects the edit if `wordfilters` is missing from `publicOptions`, so the failure surfaces when you save rather than when every author starts getting rejected.
+`publicOptions` is **required**, not decorative. Options are private by default in pkc-js, and a client that cannot read the rules cannot satisfy them. The challenge's `validateChallengeSettings` hook rejects the edit if `wordfilter/v1/rules` is missing from `publicOptions`, so the failure surfaces when you save rather than when every author starts getting rejected.
 
 ### Options
 
 | Option | Required | Must be in `publicOptions` | Description |
 |---|---|---|---|
-| `wordfilters` | yes | yes | JSON array of `{ src, dst }`, applied in array order, cascading |
-| `fieldNames` | no | when set | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
+| `wordfilter/v1/rules` | yes | yes | JSON array of `{ src, dst }`, applied in array order, cascading |
+| `wordfilter/v1/fieldNames` | no | when set | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
 | `error` | no | owner's call | Message shown to the author when a publication is rejected |
 
-An option has to be public when a client cannot satisfy the challenge without reading it. That covers `wordfilters` always, and `fieldNames` whenever the owner sets it: a client filtering the three default fields cannot satisfy a community checking a different set, and nothing in the published record would explain the rejections. `error` is returned in the rejection itself, so publishing it is transparency rather than a requirement.
+An option has to be public when a client cannot satisfy the challenge without reading it. That covers `wordfilter/v1/rules` always, and `wordfilter/v1/fieldNames` whenever the owner sets it: a client filtering the three default fields cannot satisfy a community checking a different set, and nothing in the published record would explain the rejections. Those two are also exactly the options the contract namespaces, for the same reason. `error` is returned in the rejection itself, so publishing it is transparency rather than a requirement, and it keeps its plain name.
 
 ### Validation
 
 `validateChallengeSettings` rejects at edit time:
 
-- `wordfilters` missing from `publicOptions`, or unparseable JSON, or not an array of `{ src, dst }` strings
+- `wordfilter/v1/rules` missing from `publicOptions`, or unparseable JSON, or not an array of `{ src, dst }` strings
 - an empty `src`
 - `src === dst`
 - the same `src` in more than one rule
 - any `dst` containing any `src`
 - more than 64 rules, or a `src` or `dst` longer than 128 characters
-- `fieldNames`, when set, unparseable, not an array of non-empty strings, or missing from `publicOptions`
+- `wordfilter/v1/fieldNames`, when set, unparseable, not an array of non-empty strings, or missing from `publicOptions`
 
 The `src === dst`, duplicate `src` and `dst`-contains-`src` checks all compare case-insensitively, because matching is case-insensitive: `{src: "LOL", dst: "lol"}` replaces nothing just as surely as `{src: "lol", dst: "lol"}` does.
 
 The `dst` containing `src` rule is what guarantees the client's loop terminates. Without it a rule like `lol` becomes `lolol` produces output that always contains a filtered word, making every post permanently unpublishable.
+
+## Migrating from 0.1.x
+
+0.1.x used bare `wordfilters` and `fieldNames` option names, which made the package rather than the contract the thing clients keyed off. Rename both, in `options` and in `publicOptions`:
+
+| 0.1.x | Now |
+|---|---|
+| `wordfilters` | `wordfilter/v1/rules` |
+| `fieldNames` | `wordfilter/v1/fieldNames` |
+| `error` | `error`, unchanged |
+
+There is no fallback to the old names, on purpose. A wordfilter that quietly stops filtering is the exact failure this package exists to prevent, so an unmigrated community fails loudly instead: pkc-js rejects the now-undeclared option at community start with `ERR_CHALLENGE_OPTION_NOT_DECLARED_IN_OPTION_INPUTS`, naming the offending option, and `validateChallengeSettings` rejects the edit if you try to save it.
+
+Clients written against 0.1.x need the same rename in whatever they copied from this README.
 
 ## Matching semantics
 
@@ -243,7 +296,7 @@ npm run build
 | Path | What it is |
 |---|---|
 | `src/wordfilter-challenge.ts` | The `ChallengeFileFactory`: `optionInputs`, `getChallenge`, `validateChallengeSettings` |
-| `src/apply-wordfilters.ts` | The client-side replacement loop. Imports nothing, so it bundles for a browser |
+| `src/apply-wordfilters.ts` | The client-side replacement loop and the `wordfilter/v1` option keys. Imports nothing, so it bundles for a browser |
 | `src/types.ts` | Re-exports of the pkc-js challenge types |
 
 ## License

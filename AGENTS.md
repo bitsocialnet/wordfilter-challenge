@@ -17,8 +17,16 @@ Conventions specific to this challenge:
 - `README.md` is the spec. Behaviour changes belong there first.
 - `src/apply-wordfilters.ts` imports nothing. It runs in a browser, in a publishing client, and its
   behaviour must stay identical to the snippet in the README, which is what most frontends will actually
-  copy. They discover the challenge through `community.challenges[i].publicOptions` and never install this
+  copy. They discover the contract through `community.challenges[i].publicOptions` and never install this
   package.
+- `WORDFILTER_V1_RULES_OPTION` and `WORDFILTER_V1_FIELD_NAMES_OPTION` are the wire contract, not internal
+  names. Clients recognise `wordfilter/v1` by the presence of the rules key in a community's
+  `publicOptions`, and most of them never install this package, so renaming either string silently stops
+  every such client from filtering. A rename is a new contract version, never an edit to v1. The literals
+  are pinned in `test/wordfilter-challenge.test.ts` so this fails a test rather than a live board.
+- The `wordfilter/v1` namespace covers exactly the options a publishing client must read. Anything a
+  client never reads, `error` today, keeps its plain name and stays free to differ between
+  implementations. This package is one implementation of the contract, not its owner.
 - `validateChallengeSettings` is sync and does no network. It runs on every community start, so an async
   validator would turn a third party's outage into a startup problem.
 - `ChallengeFileFactory` never throws. It runs on load as well as on edit, so a throw fails community

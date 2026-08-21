@@ -4,7 +4,12 @@ import wordfilterChallenge, {
   optionInputs,
   validateChallengeSettings
 } from "../src/wordfilter-challenge.js";
-import { applyWordfilters, type WordfilterRule } from "../src/apply-wordfilters.js";
+import {
+  applyWordfilters,
+  WORDFILTER_V1_FIELD_NAMES_OPTION,
+  WORDFILTER_V1_RULES_OPTION,
+  type WordfilterRule
+} from "../src/apply-wordfilters.js";
 import type {
   ChallengeResultInput,
   CommunityChallengeSetting,
@@ -26,14 +31,14 @@ const buildSettings = (params: {
   publicOptions?: string[];
 }): CommunityChallengeSetting => {
   const options: Record<string, string> = {};
-  if (params.wordfilters !== undefined) options["wordfilters"] = params.wordfilters;
-  if (params.fieldNames !== undefined) options["fieldNames"] = params.fieldNames;
+  if (params.wordfilters !== undefined) options[WORDFILTER_V1_RULES_OPTION] = params.wordfilters;
+  if (params.fieldNames !== undefined) options[WORDFILTER_V1_FIELD_NAMES_OPTION] = params.fieldNames;
   if (params.error !== undefined) options["error"] = params.error;
 
   return {
     name: "wordfilter",
     options,
-    publicOptions: params.publicOptions ?? ["wordfilters"]
+    publicOptions: params.publicOptions ?? [WORDFILTER_V1_RULES_OPTION]
   } as CommunityChallengeSetting;
 };
 
@@ -83,10 +88,21 @@ describe("the challenge file", () => {
     expect(typeof challengeFile.validateChallengeSettings).toBe("function");
   });
 
-  it("declares every option the README documents, with wordfilters required", () => {
+  it("declares every option the README documents, with the rules required", () => {
     const declared = optionInputs.map((input) => input.option);
-    expect(declared).toEqual(["wordfilters", "fieldNames", "error"]);
-    expect(optionInputs.find((input) => input.option === "wordfilters")?.required).toBe(true);
+    expect(declared).toEqual(["wordfilter/v1/rules", "wordfilter/v1/fieldNames", "error"]);
+    expect(optionInputs.find((input) => input.option === WORDFILTER_V1_RULES_OPTION)?.required).toBe(
+      true
+    );
+  });
+
+  // These two strings are the wire contract. Clients recognise wordfilter/v1 by the presence of the rules
+  // key in a community's publicOptions, and most of them never install this package, so renaming either
+  // constant silently stops every such client from filtering. Asserting the literals here makes a rename
+  // a test failure rather than a field report.
+  it("pins the contract option keys", () => {
+    expect(WORDFILTER_V1_RULES_OPTION).toBe("wordfilter/v1/rules");
+    expect(WORDFILTER_V1_FIELD_NAMES_OPTION).toBe("wordfilter/v1/fieldNames");
   });
 
   // The factory runs on load as well as on edit, so a throw here fails community startup rather than the
@@ -255,7 +271,7 @@ describe("validateChallengeSettings", () => {
         wordfilters: JSON.stringify(DEFAULT_RULES),
         fieldNames: JSON.stringify(["content", "title", "author.displayName"]),
         error: "This board replaces certain words.",
-        publicOptions: ["wordfilters", "fieldNames", "error"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION, "error"]
       })
     );
   });
@@ -263,29 +279,43 @@ describe("validateChallengeSettings", () => {
   it("rejects wordfilters missing from publicOptions", () => {
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), publicOptions: [] }),
-      /wordfilters must be listed in publicOptions/
+      /wordfilter\/v1\/rules must be listed in publicOptions/
     );
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), publicOptions: ["error"] }),
-      /wordfilters must be listed in publicOptions/
+      /wordfilter\/v1\/rules must be listed in publicOptions/
     );
   });
 
+  // The 0.1.x keys. A community that was never migrated must fail loudly: getChallenge reading no rules
+  // would return success for everything, which is a wordfilter that has quietly stopped filtering. In a
+  // live community core rejects the undeclared option before this hook is ever reached, so this is the
+  // second of two guards, not the only one.
+  it("rejects the pre-contract wordfilters and fieldNames keys", () => {
+    const legacy = {
+      name: "wordfilter",
+      options: { wordfilters: JSON.stringify(DEFAULT_RULES), fieldNames: '["content"]' },
+      publicOptions: ["wordfilters", "fieldNames"]
+    } as CommunityChallengeSetting;
+
+    expectRejected(legacy, /wordfilter\/v1\/rules must be listed in publicOptions/);
+  });
+
   it("rejects unparseable wordfilters JSON", () => {
-    expectRejected(buildSettings({ wordfilters: "{not json" }), /wordfilters is not valid JSON/);
+    expectRejected(buildSettings({ wordfilters: "{not json" }), /wordfilter\/v1\/rules is not valid JSON/);
   });
 
   it("rejects wordfilters that is not an array of objects", () => {
     expectRejected(buildSettings({ wordfilters: '{"src":"a","dst":"b"}' }), /must be a JSON array/);
-    expectRejected(buildSettings({ wordfilters: '["cloud"]' }), /wordfilters\[0\] must be an object/);
-    expectRejected(buildSettings({ wordfilters: '[{"dst":"b"}]' }), /wordfilters\[0\]\.src must be a string/);
-    expectRejected(buildSettings({ wordfilters: '[{"src":"a"}]' }), /wordfilters\[0\]\.dst must be a string/);
+    expectRejected(buildSettings({ wordfilters: '["cloud"]' }), /wordfilter\/v1\/rules\[0\] must be an object/);
+    expectRejected(buildSettings({ wordfilters: '[{"dst":"b"}]' }), /wordfilter\/v1\/rules\[0\]\.src must be a string/);
+    expectRejected(buildSettings({ wordfilters: '[{"src":"a"}]' }), /wordfilter\/v1\/rules\[0\]\.dst must be a string/);
   });
 
   it("rejects an empty src", () => {
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify([{ src: "", dst: "x" }]) }),
-      /wordfilters\[0\]\.src must not be empty/
+      /wordfilter\/v1\/rules\[0\]\.src must not be empty/
     );
   });
 
@@ -308,14 +338,14 @@ describe("validateChallengeSettings", () => {
           { src: "A", dst: "c" }
         ])
       }),
-      /is already the src of wordfilters\[0\]/
+      /is already the src of rule 0/
     );
   });
 
   it("rejects a dst containing its own src, the rule that keeps the client loop terminating", () => {
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify([{ src: "lol", dst: "lolol" }]) }),
-      /contains wordfilters\[0\]\.src/
+      /contains rule 0's src/
     );
   });
 
@@ -327,14 +357,14 @@ describe("validateChallengeSettings", () => {
           { src: "z", dst: "y" }
         ])
       }),
-      /contains wordfilters\[1\]\.src/
+      /contains rule 1's src/
     );
   });
 
   it("rejects a dst that contains a src case-insensitively", () => {
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify([{ src: "lol", dst: "LOLOL" }]) }),
-      /contains wordfilters\[0\]\.src/
+      /contains rule 0's src/
     );
   });
 
@@ -372,7 +402,7 @@ describe("validateChallengeSettings", () => {
 
   // An empty string satisfies core's `required` check, so the hook has to have an opinion on it.
   it("rejects an empty wordfilters string rather than silently disabling the filter", () => {
-    expectRejected(buildSettings({ wordfilters: "" }), /wordfilters is not valid JSON/);
+    expectRejected(buildSettings({ wordfilters: "" }), /wordfilter\/v1\/rules is not valid JSON/);
   });
 
   it("rejects an empty fieldNames string", () => {
@@ -380,9 +410,9 @@ describe("validateChallengeSettings", () => {
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
         fieldNames: "",
-        publicOptions: ["wordfilters", "fieldNames"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
       }),
-      /fieldNames is not valid JSON/
+      /wordfilter\/v1\/fieldNames is not valid JSON/
     );
   });
 
@@ -391,9 +421,9 @@ describe("validateChallengeSettings", () => {
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
         fieldNames: JSON.stringify(["content"]),
-        publicOptions: ["wordfilters"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION]
       }),
-      /fieldNames must be listed in publicOptions/
+      /wordfilter\/v1\/fieldNames must be listed in publicOptions/
     );
   });
 
@@ -402,23 +432,23 @@ describe("validateChallengeSettings", () => {
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
         fieldNames: "not json",
-        publicOptions: ["wordfilters", "fieldNames"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
       }),
-      /fieldNames is not valid JSON/
+      /wordfilter\/v1\/fieldNames is not valid JSON/
     );
     expectRejected(
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
         fieldNames: '["content", ""]',
-        publicOptions: ["wordfilters", "fieldNames"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
       }),
-      /fieldNames\[1\] must be a non-empty string/
+      /wordfilter\/v1\/fieldNames\[1\] must be a non-empty string/
     );
   });
 
   it("stays silent about an unset fieldNames", () => {
     expectValid(
-      buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), publicOptions: ["wordfilters"] })
+      buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), publicOptions: [WORDFILTER_V1_RULES_OPTION] })
     );
   });
 
@@ -427,7 +457,7 @@ describe("validateChallengeSettings", () => {
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
         error: "custom",
-        publicOptions: ["wordfilters"]
+        publicOptions: [WORDFILTER_V1_RULES_OPTION]
       })
     );
   });
