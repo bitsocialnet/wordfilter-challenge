@@ -2,7 +2,7 @@
 
 A [pkc-js](https://github.com/pkcprotocol/pkc-js) challenge that makes community wordfilters a real rule instead of a cosmetic display filter.
 
-> **Status: specification only.** Nothing is implemented yet. This README is the spec the implementation should follow. Tracked in [pkc-js#281](https://github.com/pkcprotocol/pkc-js/issues/281).
+> **Status: implemented.** This README is the spec, and `src/` follows it. Tracked in [pkc-js#281](https://github.com/pkcprotocol/pkc-js/issues/281).
 
 ## What it does
 
@@ -30,9 +30,9 @@ This is the section that matters if you are building a frontend that publishes t
 
 The rules are published in the community record, in the challenge's `publicOptions`. Collect them from every wordfilter challenge the community has configured, in challenge order.
 
-```js
-const WORDFILTER_CHALLENGE_NAME = "wordfilter";
+The challenge's `name` is **not** in the published record: `path`, `name` and `options` are all stripped when `community.settings.challenges[i]` becomes `community.challenges[i]`. The presence of a `wordfilters` public option is the only thing a client can key off, which is exactly why the challenge requires it to be published.
 
+```js
 function getWordfilterConfigs(community) {
     return (community.challenges ?? [])
         .filter((challenge) => challenge.publicOptions?.wordfilters)
@@ -65,8 +65,10 @@ Loop until the output is stable:
 ```js
 const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// The `() => dst` replacer, not a plain `dst`: `String.replace` reads `$&` and friends out of a string
+// replacement, and rules are literal on both sides.
 const applyOnce = (text, rules) =>
-    rules.reduce((acc, { src, dst }) => acc.replace(new RegExp(escapeRegExp(src), "gi"), dst), text);
+    rules.reduce((acc, { src, dst }) => acc.replace(new RegExp(escapeRegExp(src), "gi"), () => dst), text);
 
 export function applyWordfilters(text, rules, maxPasses = 8) {
     let out = text;
@@ -80,6 +82,8 @@ export function applyWordfilters(text, rules, maxPasses = 8) {
 ```
 
 Stable output contains no filtered word by definition, which is exactly what the community checks for.
+
+Copying that function is the expected path: your client sees the challenge through `community.challenges` and has no reason to depend on the package that produced it. If you do already bundle npm packages, the same function is exported as `applyWordfilters` from `@bitsocial/wordfilter-challenge`, with nothing from pkc-js behind it.
 
 ### 3. Apply it before creating the publication
 
@@ -107,6 +111,50 @@ Your copy of the community record can be older than the community's current sett
 
 When that happens the publication is rejected with the challenge's `error` message. Refresh the community, re-apply, and let the author retry. **Do not re-sign automatically:** that would silently publish text the author never reviewed, which is the exact failure this design exists to prevent.
 
+## Requirements
+
+- pkc-js `>=0.0.85`, for `publicOptions` ([pkc-js#282](https://github.com/pkcprotocol/pkc-js/issues/282)) and `validateChallengeSettings` ([pkc-js#283](https://github.com/pkcprotocol/pkc-js/issues/283))
+- Node.js `>=22`
+- ESM-only environment
+
+## Install
+
+### With bitsocial-cli
+
+```bash
+bitsocial challenge install @bitsocial/wordfilter-challenge
+```
+
+```bash
+bitsocial community edit your-community.bso \
+  '--settings.challenges[0].name' @bitsocial/wordfilter-challenge \
+  '--settings.challenges[0].options.wordfilters' '[{"src":"plebbit","dst":"bitcoin"}]' \
+  '--settings.challenges[0].publicOptions[0]' wordfilters
+```
+
+### With pkc-js over RPC
+
+Install the challenge on the RPC server, then set it on your community by name. Nothing has to be installed on the client side:
+
+```bash
+bitsocial challenge install @bitsocial/wordfilter-challenge
+```
+
+### With pkc-js (TypeScript)
+
+Running your own node locally, without RPC:
+
+```bash
+npm install @bitsocial/wordfilter-challenge
+```
+
+```ts
+import PKC from "@pkcprotocol/pkc-js";
+import { wordfilterChallenge } from "@bitsocial/wordfilter-challenge";
+
+PKC.challenges["@bitsocial/wordfilter-challenge"] = wordfilterChallenge;
+```
+
 ## Configuration
 
 For community owners, set in `settings.challenges`:
@@ -116,7 +164,7 @@ await community.edit({
     settings: {
         challenges: [
             {
-                name: "wordfilter",
+                name: "@bitsocial/wordfilter-challenge",
                 options: {
                     wordfilters: JSON.stringify([
                         { src: "plebbit", dst: "bitcoin" },
@@ -134,26 +182,29 @@ await community.edit({
 
 `publicOptions` is **required**, not decorative. Options are private by default in pkc-js, and a client that cannot read the rules cannot satisfy them. The challenge's `validateChallengeSettings` hook rejects the edit if `wordfilters` is missing from `publicOptions`, so the failure surfaces when you save rather than when every author starts getting rejected.
 
-Requires pkc-js **0.0.85** or later, for `publicOptions` ([pkc-js#282](https://github.com/pkcprotocol/pkc-js/issues/282)) and `validateChallengeSettings` ([pkc-js#283](https://github.com/pkcprotocol/pkc-js/issues/283)).
-
 ### Options
 
-| Option | Public | Description |
-|---|---|---|
-| `wordfilters` | required | JSON array of `{ src, dst }`, applied in array order, cascading |
-| `fieldNames` | required | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
-| `error` | required | Message shown to the author when a publication is rejected |
+| Option | Required | Must be in `publicOptions` | Description |
+|---|---|---|---|
+| `wordfilters` | yes | yes | JSON array of `{ src, dst }`, applied in array order, cascading |
+| `fieldNames` | no | when set | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
+| `error` | no | owner's call | Message shown to the author when a publication is rejected |
+
+An option has to be public when a client cannot satisfy the challenge without reading it. That covers `wordfilters` always, and `fieldNames` whenever the owner sets it: a client filtering the three default fields cannot satisfy a community checking a different set, and nothing in the published record would explain the rejections. `error` is returned in the rejection itself, so publishing it is transparency rather than a requirement.
 
 ### Validation
 
 `validateChallengeSettings` rejects at edit time:
 
-- `wordfilters` missing from `publicOptions`, or unparseable JSON
+- `wordfilters` missing from `publicOptions`, or unparseable JSON, or not an array of `{ src, dst }` strings
 - an empty `src`
 - `src === dst`
 - the same `src` in more than one rule
 - any `dst` containing any `src`
 - more than 64 rules, or a `src` or `dst` longer than 128 characters
+- `fieldNames`, when set, unparseable, not an array of non-empty strings, or missing from `publicOptions`
+
+The `src === dst`, duplicate `src` and `dst`-contains-`src` checks all compare case-insensitively, because matching is case-insensitive: `{src: "LOL", dst: "lol"}` replaces nothing just as surely as `{src: "lol", dst: "lol"}` does.
 
 The `dst` containing `src` rule is what guarantees the client's loop terminates. Without it a rule like `lol` becomes `lolol` produces output that always contains a filtered word, making every post permanently unpublishable.
 
@@ -179,6 +230,21 @@ For blocking evasive spam and slurs outright, use pkc-js's built-in `publication
 
 Both rewrite server-side at post time and keep no copy of the original.
 
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+| Path | What it is |
+|---|---|
+| `src/wordfilter-challenge.ts` | The `ChallengeFileFactory`: `optionInputs`, `getChallenge`, `validateChallengeSettings` |
+| `src/apply-wordfilters.ts` | The client-side replacement loop. Imports nothing, so it bundles for a browser |
+| `src/types.ts` | Re-exports of the pkc-js challenge types |
+
 ## License
 
-MIT
+GPL-3.0-or-later, the same as pkc-js.
