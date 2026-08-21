@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.1.1...v0.1.2) (2026-08-21)
+
+### Bug Fixes
+
+* use a recognisable wordfilter example in the docs and option placeholder ([3b44c45](https://github.com/bitsocialnet/wordfilter-challenge/commit/3b44c453c929a574fc074a863eabbe9f201ca48e))
+
 ## 0.1.1 (2026-08-21)
 
 ### Features
