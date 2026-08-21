@@ -48,8 +48,13 @@ const applyOnce = (text: string, rules: readonly WordfilterRule[]): string =>
  * the community checks for.
  *
  * @throws if the rules never stabilise. `validateChallengeSettings` rejects the rule sets that can cause
- * this (no `dst` may contain any `src`), so a community configured through pkc-js 0.0.85+ cannot produce
- * one, but a client should still not spin forever on a hostile record.
+ * this within one challenge (no `dst` may contain any `src`), so a single challenge configured through
+ * pkc-js 0.0.85+ cannot produce one, but a client should still not spin forever on a hostile record.
+ *
+ * Two challenges on the same community can undo each other, which no per-challenge validator can see.
+ * The README's client snippet merges the rules of every challenge covering a field into one call so the
+ * loop sees the interaction; the result is then either this throw or a fixed point one challenge still
+ * rejects, and either way the board is misconfigured.
  */
 export function applyWordfilters(
   text: string,

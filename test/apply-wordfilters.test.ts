@@ -50,6 +50,27 @@ describe("applyWordfilters", () => {
     expect(applyWordfilters("one", cascading)).toBe("three");
   });
 
+  it("handles two challenges' rules in one call, as the README's client snippet merges them", () => {
+    // Challenge A alone turns "baz" into nothing it rejects, but challenge B's replacement reintroduces
+    // A's src. Applied one challenge at a time the text ends as "foo" and A rejects it; concatenated
+    // into one call the loop carries on to "bar", which both accept.
+    const challengeA: WordfilterRule[] = [{ src: "foo", dst: "bar" }];
+    const challengeB: WordfilterRule[] = [{ src: "baz", dst: "foo" }];
+    expect(applyWordfilters(applyWordfilters("baz", challengeA), challengeB)).toBe("foo");
+    expect(applyWordfilters("baz", [...challengeA, ...challengeB])).toBe("bar");
+  });
+
+  it("settles on text one challenge still rejects when two challenges undo each other", () => {
+    // Neither challenge's validateChallengeSettings can see the other, so this cannot be caught at edit
+    // time. A pass that replaces and then undoes the replacement leaves the string unchanged, which the
+    // loop reads as stable, so it returns rather than throws. The community rejects the result and the
+    // owner has a misconfigured board to fix; the README says so.
+    const challengeA: WordfilterRule[] = [{ src: "foo", dst: "bar" }];
+    const challengeB: WordfilterRule[] = [{ src: "bar", dst: "foo" }];
+    expect(applyWordfilters("foo", [...challengeA, ...challengeB])).toBe("foo");
+    expect(applyWordfilters("bar", [...challengeA, ...challengeB])).toBe("foo");
+  });
+
   it("returns the input untouched when no rule matches", () => {
     expect(applyWordfilters("nothing here", rules)).toBe("nothing here");
   });

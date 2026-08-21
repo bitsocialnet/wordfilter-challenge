@@ -48,17 +48,23 @@ This is the section that matters if you are building a frontend that publishes t
 Collect the rules from every challenge on the community that publishes `wordfilter/v1/rules`, in challenge order. A community may have more than one.
 
 ```js
+const isRule = (rule) => typeof rule?.src === "string" && typeof rule?.dst === "string";
+const isFieldName = (name) => typeof name === "string";
+
 function getWordfilterConfigs(community) {
     return (community.challenges ?? [])
         .filter((challenge) => challenge.publicOptions?.["wordfilter/v1/rules"])
         .map((challenge) => {
             try {
-                return {
-                    rules: JSON.parse(challenge.publicOptions["wordfilter/v1/rules"]),
-                    fieldNames: challenge.publicOptions["wordfilter/v1/fieldNames"]
-                        ? JSON.parse(challenge.publicOptions["wordfilter/v1/fieldNames"])
-                        : ["content", "title", "author.displayName"]
-                };
+                const rules = JSON.parse(challenge.publicOptions["wordfilter/v1/rules"]);
+                const fieldNames = challenge.publicOptions["wordfilter/v1/fieldNames"]
+                    ? JSON.parse(challenge.publicOptions["wordfilter/v1/fieldNames"])
+                    : ["content", "title", "author.displayName"];
+                // JSON.parse is happy to hand back null, an object or an array of numbers, and
+                // applyWordfilters would throw on any of them. Treat the wrong shape like bad JSON.
+                if (!Array.isArray(rules) || !rules.every(isRule)) return undefined;
+                if (!Array.isArray(fieldNames) || !fieldNames.every(isFieldName)) return undefined;
+                return { rules, fieldNames };
             } catch {
                 // A rule set you cannot parse is skipped, never fatal. Worst case the community
                 // rejects the publication with a readable error.
@@ -71,7 +77,7 @@ function getWordfilterConfigs(community) {
 
 Note what this function does not do: it never looks at which challenge implementation produced the options, because the record does not say and it does not need to.
 
-Skip anything you cannot parse. Never throw, and never refuse to load the community: a malformed rule set must cost the filter, not the whole board.
+Skip anything you cannot parse, and anything that parses to the wrong shape. Never throw, and never refuse to load the community: a malformed rule set must cost the filter, not the whole board. This package's own `validateChallengeSettings` will not let a community publish a malformed rule set, but the contract is open to other implementations and your client cannot know which one it is talking to.
 
 ### 2. Apply the rules, looping until the text stops changing
 
@@ -108,15 +114,27 @@ Filter the text before it reaches `pkc.createComment()`, so the transformation h
 
 ```js
 const configs = getWordfilterConfigs(community);
-for (const { rules, fieldNames } of configs) {
-    if (fieldNames.includes("content") && content) content = applyWordfilters(content, rules);
-    if (fieldNames.includes("title") && title) title = applyWordfilters(title, rules);
-}
-const comment = await pkc.createComment({ content, title, communityAddress, signer });
+
+// One call per field, carrying the rules of every challenge that covers that field. Do not apply the
+// challenges one at a time: a later challenge's replacement can reintroduce an earlier challenge's
+// src, and the earlier challenge would then reject the publication. The loop inside applyWordfilters
+// only sees that interaction when both rule sets are in the same call.
+const rulesFor = (fieldName) =>
+    configs.filter(({ fieldNames }) => fieldNames.includes(fieldName)).flatMap(({ rules }) => rules);
+
+if (content) content = applyWordfilters(content, rulesFor("content"));
+if (title) title = applyWordfilters(title, rulesFor("title"));
+if (displayName) displayName = applyWordfilters(displayName, rulesFor("author.displayName"));
+
+const comment = await pkc.createComment({ content, title, author: { displayName }, communityAddress, signer });
 await comment.publish();
 ```
 
+Those three fields are the defaults, so they are the minimum. If a community publishes other paths in `wordfilter/v1/fieldNames`, run the same call on whatever your client puts at those paths; the community checks exactly the configured paths and nothing else, so an unfiltered custom field is a rejection just like an unfiltered display name.
+
 The `wordfilter/v1/fieldNames` entries are dot-notation paths on the publication, the same convention `publication-match` uses for `propertyName`. So `content` covers both a comment and a comment edit without the config naming publication types.
+
+Two challenges on the same community whose rules undo each other, `foo → bar` in one and `bar → foo` in another, cannot be caught by either challenge's `validateChallengeSettings`, which sees only its own settings. The merged call then either throws `did not stabilise` or settles on text that one of the challenges still rejects, and the community returns that challenge's `error`. Both are the right outcome: no text containing either word can satisfy both challenges, so the board is misconfigured and the owner has to fix it. Handle it the same way as any other rejection, in step 5.
 
 ### 4. Show the user what happened
 
