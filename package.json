@@ -1,6 +1,6 @@
 {
   "name": "@bitsocial/wordfilter-challenge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Standalone wordfilter challenge for pkc-js: proof that a community's word replacements were applied before signing",
   "type": "module",
   "main": "./dist/index.js",
