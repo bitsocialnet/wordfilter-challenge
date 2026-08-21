@@ -1,12 +1,24 @@
-// The client side of the challenge. A community can only accept or reject, so the replacement has to
-// happen on the side holding the signing key. This file is the loop that side has to run, kept free of
-// any pkc-js import so it can be pulled into a browser bundle on its own.
+// The client side of the `wordfilter/v1` contract. A community can only accept or reject, so the
+// replacement has to happen on the side holding the signing key. This file is the loop that side has to
+// run, kept free of any pkc-js import so it can be pulled into a browser bundle on its own.
 //
-// Most frontends will never install this package: they discover the challenge through
-// `community.challenges[i].publicOptions` and have no reason to know which package produced it. The
-// README carries this same loop as a copy-pasteable snippet for them, and that snippet is the contract.
-// This export exists for the minority that does bundle the package, and must stay behaviourally
-// identical to the README's version.
+// Most frontends will never install this package: they discover the contract through
+// `community.challenges[i].publicOptions` and have no reason to know which package produced it, or that
+// this one exists. The README carries this same loop as a copy-pasteable snippet for them, and that
+// snippet is the contract. This export exists for the minority that does bundle the package, and must
+// stay behaviourally identical to the README's version.
+
+/**
+ * The option key carrying the rules, and the only thing a client keys off to recognise the contract.
+ *
+ * Namespaced by contract rather than by package on purpose. A client that matched on the package name,
+ * or on a generic `wordfilters` key, would lock every other implementation of the same behaviour out of
+ * every UI. Anything that publishes this key claims to implement `wordfilter/v1`, whoever wrote it.
+ */
+export const WORDFILTER_V1_RULES_OPTION = "wordfilter/v1/rules";
+
+/** The option key carrying the fields to filter. Optional, and defaults to {@link DEFAULT_FIELD_NAMES}. */
+export const WORDFILTER_V1_FIELD_NAMES_OPTION = "wordfilter/v1/fieldNames";
 
 export interface WordfilterRule {
   /** The literal string to look for. Never a regex, and matched case-insensitively. */
