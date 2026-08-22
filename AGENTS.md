@@ -10,7 +10,9 @@ Reference source files for this repository:
 Workflow:
 
 - Before every commit, run `npm run typecheck` and ensure it passes with no errors.
-- Before every commit, run `npm test` and ensure it passes.
+- Before every commit, run `npm test` (vitest) and ensure it passes.
+- Never push to a PR branch without first running `npm run typecheck` and `npm test` locally and seeing
+  them pass. CI runs the same checks, but a red PR is a round trip that a local run avoids.
 
 Conventions specific to this challenge:
 
@@ -33,6 +35,11 @@ Conventions specific to this challenge:
   startup rather than the offending edit.
 - Absent publication fields pass. `publication-match` treats a missing property as a failure, which would
   reject every vote. Do not copy that.
+- Test fixtures are typed against pkc-js's own challenge-time publication types
+  (`GetChallengeArgsInput["challengeRequestMessage"][K]`) through the `build*` helpers in
+  `test/wordfilter-challenge.test.ts`. Do not cast a publication through `as unknown as`: that is how a
+  `content` on a commentModeration, a field no client can send, once passed as a test. Each publication
+  type gets its own test, with the shape it actually has on the wire.
 
 Releasing:
 

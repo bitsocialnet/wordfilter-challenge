@@ -31,13 +31,28 @@ So the signal a client keys off is an option key that names a **contract** rathe
 | Public option | Required | Meaning |
 |---|---|---|
 | `wordfilter/v1/rules` | yes | JSON array of `{ src, dst }`. Its presence is what identifies the contract |
-| `wordfilter/v1/fieldNames` | no | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
+| `wordfilter/v1/fieldNames` | no | JSON array of dot-notation paths, each starting with the publication type. Defaults to the list under [Default fields](#default-fields) |
 
 This package is one implementation. Anything that publishes `wordfilter/v1/rules` with the semantics below claims the contract, and a client written against it keeps working with implementations that did not exist when the client was written. Keying on a package name instead, whether through a hardcoded `@bitsocial/wordfilter-challenge` or a generic `wordfilters` option, would enshrine one implementation in every UI and lock out every fork, competitor and in-house variant that behaves identically. See [issue #1](https://github.com/bitsocialnet/wordfilter-challenge/issues/1).
 
 The namespace covers exactly what a publishing client must read, and nothing else. `error` is not in it, because no client reads `error`: the community returns it in the rejection. An implementation is free to name or shape that option however it likes.
 
 `wordfilter/v2/rules` would be a different key. A client that understands both reads both, and a community can publish both during a transition without either side guessing.
+
+### Default fields
+
+When a community does not publish `wordfilter/v1/fieldNames`, both sides check this list. Every path starts with the publication type, followed by the field's path inside that publication exactly as it is on the wire.
+
+| Publication type | Default paths |
+|---|---|
+| `comment` | `comment.content`, `comment.title`, `comment.author.displayName` |
+| `commentEdit` | `commentEdit.content`, `commentEdit.reason`, `commentEdit.author.displayName` |
+| `vote` | `vote.author.displayName` |
+
+The defaults cover what an ordinary author publishes. Moderator and owner text is not in them: a moderation's reason and a community edit's title and description can be filtered by naming their paths in `wordfilter/v1/fieldNames`, as `commentModeration.commentModeration.reason`, `communityEdit.communityEdit.title` and `communityEdit.communityEdit.description`. The doubled segment is the wire shape, not a typo: the publication type is `commentModeration`, and pkc-js puts the moderation's fields under a `commentModeration` property of it; likewise for `communityEdit`.
+
+Naming the publication type in every path is deliberate. `content` on a comment and `content` on a comment edit are the same field today, but nothing guarantees they stay that way, and a bare `content` could not tell them apart. A path whose first segment is not one of the five publication types is rejected by `validateChallengeSettings`, and by `getChallenge` for a config that predates that check, because it would match nothing on any request and the wordfilter would have quietly stopped filtering.
+
 
 ## For UI client developers
 
@@ -59,7 +74,15 @@ function getWordfilterConfigs(community) {
                 const rules = JSON.parse(challenge.publicOptions["wordfilter/v1/rules"]);
                 const fieldNames = challenge.publicOptions["wordfilter/v1/fieldNames"]
                     ? JSON.parse(challenge.publicOptions["wordfilter/v1/fieldNames"])
-                    : ["content", "title", "author.displayName"];
+                    : [
+                          "comment.content",
+                          "comment.title",
+                          "comment.author.displayName",
+                          "commentEdit.content",
+                          "commentEdit.reason",
+                          "commentEdit.author.displayName",
+                          "vote.author.displayName"
+                      ];
                 // JSON.parse is happy to hand back null, an object or an array of numbers, and
                 // applyWordfilters would throw on any of them. Treat the wrong shape like bad JSON.
                 if (!Array.isArray(rules) || !rules.every(isRule)) return undefined;
@@ -122,17 +145,65 @@ const configs = getWordfilterConfigs(community);
 const rulesFor = (fieldName) =>
     configs.filter(({ fieldNames }) => fieldNames.includes(fieldName)).flatMap(({ rules }) => rules);
 
-if (content) content = applyWordfilters(content, rulesFor("content"));
-if (title) title = applyWordfilters(title, rulesFor("title"));
-if (displayName) displayName = applyWordfilters(displayName, rulesFor("author.displayName"));
+if (content) content = applyWordfilters(content, rulesFor("comment.content"));
+if (title) title = applyWordfilters(title, rulesFor("comment.title"));
+if (displayName) displayName = applyWordfilters(displayName, rulesFor("comment.author.displayName"));
 
 const comment = await pkc.createComment({ content, title, author: { displayName }, communityAddress, signer });
 await comment.publish();
 ```
 
-Those three fields are the defaults, so they are the minimum. If a community publishes other paths in `wordfilter/v1/fieldNames`, run the same call on whatever your client puts at those paths; the community checks exactly the configured paths and nothing else, so an unfiltered custom field is a rejection just like an unfiltered display name.
+The challenge runs on every publication type, not only new comments. The [default field list](#default-fields) also names the text of a comment edit and the display name on a vote, so the same `rulesFor` call applies before each of these, with the path prefixed by the publication type:
 
-The `wordfilter/v1/fieldNames` entries are dot-notation paths on the publication, the same convention `publication-match` uses for `propertyName`. So `content` covers both a comment and a comment edit without the config naming publication types.
+```js
+// Comment edit: content and reason are top-level on the edit, displayName is under author.
+const edit = await pkc.createCommentEdit({
+    commentCid,
+    content: applyWordfilters(newContent, rulesFor("commentEdit.content")),
+    reason: applyWordfilters(reason, rulesFor("commentEdit.reason")),
+    author: { displayName: applyWordfilters(displayName, rulesFor("commentEdit.author.displayName")) },
+    communityAddress,
+    signer
+});
+
+// Vote: the only text on it is the display name.
+const vote = await pkc.createVote({
+    commentCid,
+    vote: 1,
+    author: { displayName: applyWordfilters(displayName, rulesFor("vote.author.displayName")) },
+    communityAddress,
+    signer
+});
+
+```
+
+Those paths are the defaults, so they are the minimum. If a community publishes other paths in `wordfilter/v1/fieldNames`, run the same call on whatever your client puts at those paths; the community checks exactly the configured paths and nothing else, so an unfiltered custom field is a rejection just like an unfiltered display name. The paths a community is most likely to add are moderator and owner text, which `rulesFor` returns empty for unless the community names them:
+
+```js
+// Comment moderation: the moderator's reason lives under the publication's commentModeration property,
+// hence the doubled segment.
+const moderation = await pkc.createCommentModeration({
+    commentCid,
+    commentModeration: {
+        removed: true,
+        reason: applyWordfilters(reason, rulesFor("commentModeration.commentModeration.reason"))
+    },
+    communityAddress,
+    signer
+});
+
+// Community edit: title and description live under the publication's communityEdit property.
+const communityEdit = await pkc.createCommunityEdit({
+    communityEdit: {
+        title: applyWordfilters(title, rulesFor("communityEdit.communityEdit.title")),
+        description: applyWordfilters(description, rulesFor("communityEdit.communityEdit.description"))
+    },
+    communityAddress,
+    signer
+});
+```
+
+The `wordfilter/v1/fieldNames` entries are dot-notation paths, the same convention `publication-match` uses for `propertyName`, resolved against the challenge request's publication map rather than the publication itself. So the first segment names the publication type, and a path is simply absent, and passes, on a request carrying a different type: `commentEdit.content` never sees a new comment, and `comment.content` never sees an edit.
 
 Two challenges on the same community whose rules undo each other, `foo → bar` in one and `bar → foo` in another, cannot be caught by either challenge's `validateChallengeSettings`, which sees only its own settings. The merged call then either throws `did not stabilise` or settles on text that one of the challenges still rejects, and the community returns that challenge's `error`. Both are the right outcome: no text containing either word can satisfy both challenges, so the board is misconfigured and the owner has to fix it. Handle it the same way as any other rejection, in step 5.
 
@@ -207,9 +278,13 @@ await community.edit({
                         { src: "spamword", dst: "" }
                     ]),
                     "wordfilter/v1/fieldNames": JSON.stringify([
-                        "content",
-                        "title",
-                        "author.displayName"
+                        "comment.content",
+                        "comment.title",
+                        "comment.author.displayName",
+                        "commentEdit.content",
+                        "commentEdit.reason",
+                        "commentEdit.author.displayName",
+                        "vote.author.displayName"
                     ]),
                     error: "This board replaces certain words. Please repost with the replacements applied."
                 },
@@ -227,10 +302,10 @@ await community.edit({
 | Option | Required | Must be in `publicOptions` | Description |
 |---|---|---|---|
 | `wordfilter/v1/rules` | yes | yes | JSON array of `{ src, dst }`, applied in array order, cascading |
-| `wordfilter/v1/fieldNames` | no | when set | JSON array of dot-notation paths. Defaults to `content`, `title`, `author.displayName` |
+| `wordfilter/v1/fieldNames` | no | when set | JSON array of dot-notation paths, each starting with the publication type. Defaults to the list under [Default fields](#default-fields) |
 | `error` | no | owner's call | Message shown to the author when a publication is rejected |
 
-An option has to be public when a client cannot satisfy the challenge without reading it. That covers `wordfilter/v1/rules` always, and `wordfilter/v1/fieldNames` whenever the owner sets it: a client filtering the three default fields cannot satisfy a community checking a different set, and nothing in the published record would explain the rejections. Those two are also exactly the options the contract namespaces, for the same reason. `error` is returned in the rejection itself, so publishing it is transparency rather than a requirement, and it keeps its plain name.
+An option has to be public when a client cannot satisfy the challenge without reading it. That covers `wordfilter/v1/rules` always, and `wordfilter/v1/fieldNames` whenever the owner sets it: a client filtering the default fields cannot satisfy a community checking a different set, and nothing in the published record would explain the rejections. Those two are also exactly the options the contract namespaces, for the same reason. `error` is returned in the rejection itself, so publishing it is transparency rather than a requirement, and it keeps its plain name.
 
 ### Validation
 
@@ -242,21 +317,31 @@ An option has to be public when a client cannot satisfy the challenge without re
 - the same `src` in more than one rule
 - any `dst` containing any `src`
 - more than 64 rules, or a `src` or `dst` longer than 128 characters
-- `wordfilter/v1/fieldNames`, when set, unparseable, not an array of non-empty strings, or missing from `publicOptions`
+- `wordfilter/v1/fieldNames`, when set, unparseable, not an array of non-empty strings, containing a path whose first segment is not a publication type (`comment`, `vote`, `commentEdit`, `commentModeration`, `communityEdit`), or missing from `publicOptions`
 
 The `src === dst`, duplicate `src` and `dst`-contains-`src` checks all compare case-insensitively, because matching is case-insensitive: `{src: "LOL", dst: "lol"}` replaces nothing just as surely as `{src: "lol", dst: "lol"}` does.
 
 The `dst` containing `src` rule is what guarantees the client's loop terminates. Without it a rule like `lol` becomes `lolol` produces output that always contains a filtered word, making every post permanently unpublishable.
 
-## Migrating from 0.1.x
+## Migrating from 0.1.x and 0.2.0
 
-0.1.x used bare `wordfilters` and `fieldNames` option names, which made the package rather than the contract the thing clients keyed off. Rename both, in `options` and in `publicOptions`:
+0.2.0 already uses the `wordfilter/v1` option keys; only the paths inside `wordfilter/v1/fieldNames` change for it, see below. 0.1.x used bare `wordfilters` and `fieldNames` option names, which made the package rather than the contract the thing clients keyed off. Rename both, in `options` and in `publicOptions`:
 
 | 0.1.x | Now |
 |---|---|
 | `wordfilters` | `wordfilter/v1/rules` |
 | `fieldNames` | `wordfilter/v1/fieldNames` |
 | `error` | `error`, unchanged |
+
+The paths inside `fieldNames` change too, for 0.2.0 as much as 0.1.x. Both resolved them against the publication, so `content` meant "content on whatever was published". `wordfilter/v1/fieldNames` now resolves them against the challenge request's publication map, so every path starts with the publication type, and a bare `content` is rejected rather than silently matching nothing:
+
+| 0.1.x / 0.2.0 path | Now |
+|---|---|
+| `content` | `comment.content`, and `commentEdit.content` if edits should be filtered too |
+| `title` | `comment.title` |
+| `author.displayName` | one entry per publication type: `comment.author.displayName`, `commentEdit.author.displayName`, `vote.author.displayName` |
+
+If 0.1.x or 0.2.0 ran with the default field list, dropping `fieldNames` entirely and taking the new defaults is the closest equivalent. A 0.2.0 community that set `wordfilter/v1/fieldNames` with bare paths fails loudly at the next start, `validateChallengeSettings` naming the offending path, until the paths are prefixed.
 
 There is no fallback to the old names, on purpose. A wordfilter that quietly stops filtering is the exact failure this package exists to prevent, so an unmigrated community fails loudly instead: pkc-js rejects the now-undeclared option at community start with `ERR_CHALLENGE_OPTION_NOT_DECLARED_IN_OPTION_INPUTS`, naming the offending option, and `validateChallengeSettings` rejects the edit if you try to save it.
 
