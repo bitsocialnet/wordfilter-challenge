@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.2.0...v0.3.0) (2026-08-22)
+
+### ⚠ BREAKING CHANGES
+
+* wordfilter/v1/fieldNames paths must start with the publication
+type. Bare paths such as "content" are rejected. The default field list changed
+to comment.content, comment.title, comment.author.displayName,
+commentEdit.content, commentEdit.reason, commentEdit.author.displayName and
+vote.author.displayName. Clients hardcoding the old defaults must update.
+
+### Features
+
+* prefix wordfilter/v1 field paths with the publication type ([3daefc4](https://github.com/bitsocialnet/wordfilter-challenge/commit/3daefc48f13096729234f83421d8b0e020cfc57b)), closes [#3](https://github.com/bitsocialnet/wordfilter-challenge/issues/3)
+
 ## [0.2.0](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.1.2...v0.2.0) (2026-08-21)
 
 ### ⚠ BREAKING CHANGES
