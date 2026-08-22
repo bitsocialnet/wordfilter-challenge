@@ -6,6 +6,7 @@ import wordfilterChallenge, {
 } from "../src/wordfilter-challenge.js";
 import {
   applyWordfilters,
+  DEFAULT_FIELD_NAMES,
   WORDFILTER_V1_FIELD_NAMES_OPTION,
   WORDFILTER_V1_RULES_OPTION,
   type WordfilterRule
@@ -42,18 +43,79 @@ const buildSettings = (params: {
   } as CommunityChallengeSetting;
 };
 
-const runChallenge = async (params: {
+type ChallengeRequestMessage = GetChallengeArgsInput["challengeRequestMessage"];
+type PublicationType = "comment" | "vote" | "commentEdit" | "commentModeration" | "communityEdit";
+type Publication<K extends PublicationType> = NonNullable<ChallengeRequestMessage[K]>;
+
+// The fixtures below are typed against pkc-js's own challenge-time publication types, so tsc rejects a
+// field that does not exist on the wire (a `content` on a commentModeration, say) instead of the test
+// quietly passing against a shape no client can send.
+const COMMENT_CID = "QmbWqxBEKC3P8tqsKc98xmWNzrzDtRLMiMPL8wBuTGsMnR";
+
+const buildAuthor = (
+  overrides: Partial<Publication<"comment">["author"]> = {}
+): Publication<"comment">["author"] => ({
+  address: "author.bso",
+  publicKey: "authorPublicKey",
+  ...overrides
+});
+
+// Sign nothing, but shape the signature the way pkc-js does: every other property on the publication
+// is a signed property.
+const withSignature = <T extends object>(unsigned: T) => ({
+  ...unsigned,
+  signature: {
+    type: "ed25519",
+    signature: "signature",
+    publicKey: "authorPublicKey",
+    signedPropertyNames: Object.keys(unsigned)
+  }
+});
+
+const PUBLICATION_BASE = {
+  communityName: "community.bso",
+  communityPublicKey: "communityPublicKey",
+  protocolVersion: "1.0.0",
+  timestamp: 1_700_000_000
+};
+
+const buildComment = (overrides: Partial<Publication<"comment">> = {}): Publication<"comment"> =>
+  withSignature({ ...PUBLICATION_BASE, author: buildAuthor(), ...overrides });
+
+const buildCommentEdit = (overrides: Partial<Publication<"commentEdit">> = {}): Publication<"commentEdit"> =>
+  withSignature({ ...PUBLICATION_BASE, author: buildAuthor(), commentCid: COMMENT_CID, ...overrides });
+
+const buildVote = (overrides: Partial<Publication<"vote">> = {}): Publication<"vote"> =>
+  withSignature({ ...PUBLICATION_BASE, author: buildAuthor(), commentCid: COMMENT_CID, vote: 1, ...overrides });
+
+const buildCommentModeration = (
+  overrides: Partial<Publication<"commentModeration">> = {}
+): Publication<"commentModeration"> =>
+  withSignature({
+    ...PUBLICATION_BASE,
+    author: buildAuthor(),
+    commentCid: COMMENT_CID,
+    commentModeration: { removed: true },
+    ...overrides
+  });
+
+const buildCommunityEdit = (
+  overrides: Partial<Publication<"communityEdit">> = {}
+): Publication<"communityEdit"> =>
+  withSignature({ ...PUBLICATION_BASE, author: buildAuthor(), communityEdit: {}, ...overrides });
+
+const runChallenge = async <K extends PublicationType>(params: {
   settings: CommunityChallengeSetting;
-  publicationType?: "comment" | "vote" | "commentEdit" | "commentModeration" | "communityEdit";
-  publication: Record<string, unknown>;
+  publicationType: K;
+  publication: Publication<K>;
 }): Promise<Extract<ChallengeResultInput, { success: boolean }>> => {
   const challengeFile = wordfilterChallenge({ challengeSettings: params.settings });
 
   const result = await challengeFile.getChallenge({
     challengeSettings: params.settings,
     challengeRequestMessage: {
-      [params.publicationType ?? "comment"]: params.publication
-    } as unknown as GetChallengeArgsInput["challengeRequestMessage"],
+      [params.publicationType]: params.publication
+    } as unknown as ChallengeRequestMessage,
     challengeIndex: 0,
     community: {} as unknown as GetChallengeArgsInput["community"]
   });
@@ -66,13 +128,14 @@ const runChallenge = async (params: {
 };
 
 const runWithRules = (
-  publication: Record<string, unknown>,
+  comment: Partial<Publication<"comment">>,
   rules: WordfilterRule[] = DEFAULT_RULES,
   extra: { fieldNames?: string; error?: string } = {}
 ) =>
   runChallenge({
     settings: buildSettings({ wordfilters: JSON.stringify(rules), ...extra }),
-    publication
+    publicationType: "comment",
+    publication: buildComment(comment)
   });
 
 describe("the challenge file", () => {
@@ -103,6 +166,21 @@ describe("the challenge file", () => {
   it("pins the contract option keys", () => {
     expect(WORDFILTER_V1_RULES_OPTION).toBe("wordfilter/v1/rules");
     expect(WORDFILTER_V1_FIELD_NAMES_OPTION).toBe("wordfilter/v1/fieldNames");
+  });
+
+  // The default field list is contract too: a client that filters the defaults and a community that checks
+  // them have to agree without either reading wordfilter/v1/fieldNames. The README client snippet carries
+  // the same literal list.
+  it("pins the default field names", () => {
+    expect(DEFAULT_FIELD_NAMES).toEqual([
+      "comment.content",
+      "comment.title",
+      "comment.author.displayName",
+      "commentEdit.content",
+      "commentEdit.reason",
+      "commentEdit.author.displayName",
+      "vote.author.displayName"
+    ]);
   });
 
   // The factory runs on load as well as on edit, so a throw here fails community startup rather than the
@@ -142,7 +220,7 @@ describe("getChallenge", () => {
       success: false,
       error: DEFAULT_ERROR
     });
-    expect(await runWithRules({ author: { displayName: "cloud fan" } })).toEqual({
+    expect(await runWithRules({ author: buildAuthor({ displayName: "cloud fan" }) })).toEqual({
       success: false,
       error: DEFAULT_ERROR
     });
@@ -155,7 +233,7 @@ describe("getChallenge", () => {
   });
 
   it("checks only the configured fieldNames", async () => {
-    const fieldNames = JSON.stringify(["title"]);
+    const fieldNames = JSON.stringify(["comment.title"]);
     expect(await runWithRules({ content: "cloud" }, DEFAULT_RULES, { fieldNames })).toEqual({
       success: true
     });
@@ -166,44 +244,204 @@ describe("getChallenge", () => {
   });
 
   it("resolves dot-notation paths of any depth", async () => {
-    const fieldNames = JSON.stringify(["author.displayName"]);
+    const fieldNames = JSON.stringify(["comment.author.displayName"]);
     expect(
-      await runWithRules({ author: { displayName: "cloud" } }, DEFAULT_RULES, { fieldNames })
+      await runWithRules({ author: buildAuthor({ displayName: "cloud" }) }, DEFAULT_RULES, { fieldNames })
     ).toEqual({ success: false, error: DEFAULT_ERROR });
   });
 
   // publication-match treats a missing property as a failure, which would reject every vote.
   describe("absent fields pass cleanly", () => {
-    it("passes a vote, which has no content or title", async () => {
-      const result = await runChallenge({
-        settings: buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES) }),
-        publicationType: "vote",
-        publication: { commentCid: "Qm...", vote: 1, author: { address: "author.bso" } }
-      });
-      expect(result).toEqual({ success: true });
-    });
-
     it("passes when the whole parent object of a path is missing", async () => {
       expect(await runWithRules({ content: "clean" })).toEqual({ success: true });
     });
 
     it("passes when a path resolves to a non-string", async () => {
-      const fieldNames = JSON.stringify(["author"]);
+      const fieldNames = JSON.stringify(["comment.author"]);
       expect(
-        await runWithRules({ author: { displayName: "cloud" } }, DEFAULT_RULES, { fieldNames })
+        await runWithRules({ author: buildAuthor({ displayName: "cloud" }) }, DEFAULT_RULES, { fieldNames })
       ).toEqual({ success: true });
     });
   });
 
-  it("passes every publication type through the same check", async () => {
-    for (const publicationType of ["comment", "commentEdit", "commentModeration", "communityEdit"] as const) {
+  // getChallenge derives the publication from whichever of these the challenge request carries and runs
+  // the same field lookup on it. Each type gets its own test, with the shape that type actually has on
+  // the wire, so a regression limited to one type fails the test that names it.
+  describe("publication types", () => {
+    const settings = buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES) });
+    const nested = (fieldNames: string[]) =>
+      buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), fieldNames: JSON.stringify(fieldNames) });
+
+    it("rejects a comment whose content contains a filtered word", async () => {
       const result = await runChallenge({
-        settings: buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES) }),
-        publicationType,
-        publication: { content: "cloud" }
+        settings,
+        publicationType: "comment",
+        publication: buildComment({ title: "hello", content: "I love the cloud" })
       });
       expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
-    }
+    });
+
+    it("passes a link post, which has no content", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "comment",
+        publication: buildComment({ title: "a picture", link: "https://example.com/picture.png" })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("rejects a comment edit whose new content contains a filtered word", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentEdit",
+        publication: buildCommentEdit({ content: "edited to mention the cloud" })
+      });
+      expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
+    });
+
+    it("passes a comment edit whose new content is clean", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentEdit",
+        publication: buildCommentEdit({ content: applyWordfilters("edited to mention the cloud", DEFAULT_RULES) })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("passes a comment edit that changes no text, such as a delete", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentEdit",
+        publication: buildCommentEdit({ deleted: true })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("rejects a comment edit whose reason contains a filtered word", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentEdit",
+        publication: buildCommentEdit({ deleted: true, reason: "posted about the cloud" })
+      });
+      expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
+    });
+
+    it("checks a comment edit's author.displayName by default", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentEdit",
+        publication: buildCommentEdit({ spoiler: true, author: buildAuthor({ displayName: "cloud fan" }) })
+      });
+      expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
+    });
+
+    // publication-match treats a missing property as a failure, which would reject every vote.
+    it("passes a vote, which has no content or title", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "vote",
+        publication: buildVote({ vote: -1 })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("checks a vote's author.displayName by default", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "vote",
+        publication: buildVote({ author: buildAuthor({ displayName: "cloud voter" }) })
+      });
+      expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
+    });
+
+    // The first path segment is the publication type, so a path scoped to one type never sees another.
+    it("applies a path only to the publication type it names", async () => {
+      const editsOnly = nested(["commentEdit.content"]);
+      expect(
+        await runChallenge({
+          settings: editsOnly,
+          publicationType: "comment",
+          publication: buildComment({ content: "cloud" })
+        })
+      ).toEqual({ success: true });
+      expect(
+        await runChallenge({
+          settings: editsOnly,
+          publicationType: "commentEdit",
+          publication: buildCommentEdit({ content: "cloud" })
+        })
+      ).toEqual({ success: false, error: DEFAULT_ERROR });
+    });
+
+    // Moderator text is not in the defaults. An owner who wants it filtered names the path, doubled
+    // segment and all, because that is where pkc-js puts it on the wire.
+    it("passes a comment moderation with the default fields, whatever its reason or displayName", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "commentModeration",
+        publication: buildCommentModeration({
+          commentModeration: { removed: true, reason: "cloud talk" },
+          author: buildAuthor({ displayName: "cloud mod" })
+        })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("rejects a comment moderation whose reason contains a filtered word, when the path is configured", async () => {
+      const reason = nested(["commentModeration.commentModeration.reason"]);
+      expect(
+        await runChallenge({
+          settings: reason,
+          publicationType: "commentModeration",
+          publication: buildCommentModeration({ commentModeration: { removed: true, reason: "cloud talk" } })
+        })
+      ).toEqual({ success: false, error: DEFAULT_ERROR });
+      expect(
+        await runChallenge({
+          settings: reason,
+          publicationType: "commentModeration",
+          publication: buildCommentModeration({ commentModeration: { removed: true } })
+        })
+      ).toEqual({ success: true });
+    });
+
+    // Owner text is not in the defaults either.
+    it("passes a community edit with the default fields, whatever its title or description", async () => {
+      const result = await runChallenge({
+        settings,
+        publicationType: "communityEdit",
+        publication: buildCommunityEdit({
+          communityEdit: { title: "the cloud board", description: "all about the cloud" },
+          author: buildAuthor({ displayName: "cloud owner" })
+        })
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it("rejects a community edit whose title or description contains a filtered word, when the paths are configured", async () => {
+      const paths = nested(["communityEdit.communityEdit.title", "communityEdit.communityEdit.description"]);
+      expect(
+        await runChallenge({
+          settings: paths,
+          publicationType: "communityEdit",
+          publication: buildCommunityEdit({ communityEdit: { title: "the cloud board" } })
+        })
+      ).toEqual({ success: false, error: DEFAULT_ERROR });
+      expect(
+        await runChallenge({
+          settings: paths,
+          publicationType: "communityEdit",
+          publication: buildCommunityEdit({ communityEdit: { description: "all about the cloud" } })
+        })
+      ).toEqual({ success: false, error: DEFAULT_ERROR });
+      expect(
+        await runChallenge({
+          settings: paths,
+          publicationType: "communityEdit",
+          publication: buildCommunityEdit({ communityEdit: { roles: { "mod.bso": { role: "moderator" } } } })
+        })
+      ).toEqual({ success: true });
+    });
   });
 
   it("passes when the rule set is empty", async () => {
@@ -213,7 +451,8 @@ describe("getChallenge", () => {
   it("passes when wordfilters is not set at all", async () => {
     const result = await runChallenge({
       settings: buildSettings({}),
-      publication: { content: "cloud" }
+      publicationType: "comment",
+      publication: buildComment({ content: "cloud" })
     });
     expect(result).toEqual({ success: true });
   });
@@ -221,10 +460,23 @@ describe("getChallenge", () => {
   it("fails loudly on a config that predates validateChallengeSettings", async () => {
     const result = await runChallenge({
       settings: buildSettings({ wordfilters: "not json" }),
-      publication: { content: "anything" }
+      publicationType: "comment",
+      publication: buildComment({ content: "anything" })
     });
     expect(result.success).toBe(false);
     expect((result as { error: string }).error).toContain("Invalid wordfilter challenge settings");
+  });
+
+  // A bare `content` resolves to nothing on the publication map, so without this it would pass everything:
+  // a wordfilter that has quietly stopped filtering.
+  it("fails loudly on a config whose paths predate the publication-type prefix", async () => {
+    const result = await runChallenge({
+      settings: buildSettings({ wordfilters: JSON.stringify(DEFAULT_RULES), fieldNames: '["content"]' }),
+      publicationType: "comment",
+      publication: buildComment({ content: "cloud" })
+    });
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain("must start with a publication type");
   });
 
   it("reports a challenge request carrying no publication", async () => {
@@ -269,7 +521,7 @@ describe("validateChallengeSettings", () => {
     expectValid(
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
-        fieldNames: JSON.stringify(["content", "title", "author.displayName"]),
+        fieldNames: JSON.stringify(DEFAULT_FIELD_NAMES),
         error: "This board replaces certain words.",
         publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION, "error"]
       })
@@ -420,7 +672,7 @@ describe("validateChallengeSettings", () => {
     expectRejected(
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
-        fieldNames: JSON.stringify(["content"]),
+        fieldNames: JSON.stringify(["comment.content"]),
         publicOptions: [WORDFILTER_V1_RULES_OPTION]
       }),
       /wordfilter\/v1\/fieldNames must be listed in publicOptions/
@@ -439,10 +691,30 @@ describe("validateChallengeSettings", () => {
     expectRejected(
       buildSettings({
         wordfilters: JSON.stringify(DEFAULT_RULES),
-        fieldNames: '["content", ""]',
+        fieldNames: '["comment.content", ""]',
         publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
       }),
       /wordfilter\/v1\/fieldNames\[1\] must be a non-empty string/
+    );
+  });
+
+  it("rejects a path whose first segment is not a publication type", () => {
+    for (const path of ["content", "author.displayName", "comments.content", ".content"]) {
+      expectRejected(
+        buildSettings({
+          wordfilters: JSON.stringify(DEFAULT_RULES),
+          fieldNames: JSON.stringify([path]),
+          publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
+        }),
+        /wordfilter\/v1\/fieldNames\[0\] must start with a publication type \(comment, vote, commentEdit, commentModeration, communityEdit\)/
+      );
+    }
+    expectValid(
+      buildSettings({
+        wordfilters: JSON.stringify(DEFAULT_RULES),
+        fieldNames: JSON.stringify(["comment.content", "vote.author.displayName", "communityEdit.communityEdit.rules"]),
+        publicOptions: [WORDFILTER_V1_RULES_OPTION, WORDFILTER_V1_FIELD_NAMES_OPTION]
+      })
     );
   });
 

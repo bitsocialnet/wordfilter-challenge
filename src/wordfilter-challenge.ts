@@ -39,8 +39,8 @@ const optionInputs: NonNullable<ChallengeFileInput["optionInputs"]> = [
     label: "Field Names",
     default: JSON.stringify(DEFAULT_FIELD_NAMES),
     description:
-      "JSON array of dot-notation paths on the publication to check, the same convention publication-match uses for propertyName. Must be listed in publicOptions when set. Defaults to content, title and author.displayName.",
-    placeholder: '["content","title","author.displayName"]'
+      "JSON array of dot-notation paths to check, each starting with the publication type: comment.content, commentEdit.reason, commentModeration.commentModeration.reason and so on. Must be listed in publicOptions when set. Defaults to the text of comments and comment edits plus author.displayName on comments, comment edits and votes.",
+    placeholder: JSON.stringify(DEFAULT_FIELD_NAMES)
   },
   {
     // Not namespaced, unlike the two above: the wordfilter/v1 namespace covers exactly what a publishing
@@ -62,21 +62,27 @@ const publicationFieldNames = [
   "communityEdit"
 ] as const;
 
-const derivePublicationFromChallengeRequest = (
+type PublicationType = (typeof publicationFieldNames)[number];
+type Publications = Partial<Record<PublicationType, PublicationWithCommunityAuthorFromDecryptedChallengeRequest>>;
+
+// The object field paths are resolved against: the challenge request's publication map, keyed by type. A
+// request carries exactly one of these, so `comment.content` is absent, and passes, on a comment edit.
+const derivePublicationsFromChallengeRequest = (
   challengeRequestMessage: GetChallengeArgsInput["challengeRequestMessage"]
-): PublicationWithCommunityAuthorFromDecryptedChallengeRequest | undefined => {
+): Publications | undefined => {
+  const publications: Publications = {};
   for (const fieldName of publicationFieldNames) {
     const publication = challengeRequestMessage[fieldName];
     if (publication) {
-      return publication;
+      publications[fieldName] = publication;
     }
   }
 
-  return undefined;
+  return Object.keys(publications).length ? publications : undefined;
 };
 
-// Dot-notation lookup, the same convention publication-match uses for `propertyName`, so `content`
-// covers a comment and a comment edit without the config naming publication types.
+// Dot-notation lookup, the same convention publication-match uses for `propertyName`, except that the
+// first segment names the publication type.
 const getValueAtPath = (publication: unknown, path: string): unknown => {
   let current: unknown = publication;
   for (const segment of path.split(".")) {
@@ -137,6 +143,15 @@ const parseFieldNames = (fieldNames: string | undefined): string[] => {
     if (typeof fieldName !== "string" || !fieldName) {
       throw new Error(`${WORDFILTER_V1_FIELD_NAMES_OPTION}[${index}] must be a non-empty string`);
     }
+    // A path that names no publication type resolves to nothing on every request, which is a wordfilter
+    // that has quietly stopped filtering. That is the failure this package exists to prevent, so it is
+    // rejected here and, for a config that predates this check, by getChallenge.
+    const publicationType = fieldName.split(".")[0] ?? "";
+    if (!(publicationFieldNames as readonly string[]).includes(publicationType)) {
+      throw new Error(
+        `${WORDFILTER_V1_FIELD_NAMES_OPTION}[${index}] must start with a publication type (${publicationFieldNames.join(", ")}), got "${fieldName}"`
+      );
+    }
     return fieldName;
   });
 };
@@ -145,8 +160,8 @@ const getChallenge = async ({
   challengeSettings,
   challengeRequestMessage
 }: GetChallengeArgsInput): Promise<ChallengeResultInput> => {
-  const publication = derivePublicationFromChallengeRequest(challengeRequestMessage);
-  if (!publication) {
+  const publications = derivePublicationsFromChallengeRequest(challengeRequestMessage);
+  if (!publications) {
     return { success: false, error: "Could not derive publication from challenge request." };
   }
 
@@ -169,10 +184,11 @@ const getChallenge = async ({
   const error = challengeSettings?.options?.["error"] || DEFAULT_ERROR;
 
   for (const fieldName of fieldNames) {
-    const value = getValueAtPath(publication, fieldName);
+    const value = getValueAtPath(publications, fieldName);
 
-    // Absent fields pass cleanly. A vote has no content, and that is not a failure. publication-match
-    // treats a missing property as a failure, which would reject every vote. Do not copy that.
+    // Absent fields pass cleanly. A vote has no content, and every path that names another publication
+    // type is absent on this request. Neither is a failure. publication-match treats a missing property as
+    // a failure, which would reject every vote. Do not copy that.
     if (typeof value !== "string") {
       continue;
     }

@@ -27,7 +27,23 @@ export interface WordfilterRule {
   dst: string;
 }
 
-export const DEFAULT_FIELD_NAMES: readonly string[] = ["content", "title", "author.displayName"];
+// The free-text fields an ordinary author publishes. Paths are rooted at the challenge request's
+// publication map, so the first segment is the publication type (comment, vote, commentEdit,
+// commentModeration, communityEdit) and the rest is the path inside that publication as it is on the wire.
+// Naming the type keeps `content` on a comment and `content` on a comment edit separately addressable, in
+// case they ever diverge. Moderator and owner text (commentModeration.commentModeration.reason,
+// communityEdit.communityEdit.title, ...) is opt-in through wordfilter/v1/fieldNames, not default. This
+// list is part of the wordfilter/v1 contract: a client filtering fewer fields than a community checks gets
+// rejected, so the README client snippet carries the same list.
+export const DEFAULT_FIELD_NAMES: readonly string[] = [
+  "comment.content",
+  "comment.title",
+  "comment.author.displayName",
+  "commentEdit.content",
+  "commentEdit.reason",
+  "commentEdit.author.displayName",
+  "vote.author.displayName"
+];
 
 export const DEFAULT_MAX_PASSES = 8;
 
