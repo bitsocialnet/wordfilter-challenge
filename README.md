@@ -123,11 +123,15 @@ export function applyWordfilters(text, rules, maxPasses = 8) {
         if (next === out) return out;
         out = next;
     }
+    // The last pass may itself have produced the fixed point, which only one more pass can confirm.
+    if (applyOnce(out, rules) === out) return out;
     throw new Error("wordfilter rules did not stabilise");
 }
 ```
 
 Stable output contains no filtered word by definition, which is exactly what the community checks for.
+
+The throw means the text was still changing after `maxPasses` passes. Either the board is misconfigured, with rules whose replacements keep re-creating a filtered word (two challenges that undo each other are one case, see the end of step 3), or the input nests a filtered word more than eight levels deep, such as nine `a`s then nine `b`s against `ab` → `""`. Handle it like a rejection: tell the author, never publish the unfiltered text.
 
 Copying that function is the expected path: your client sees the challenge through `community.challenges` and has no reason to depend on the package that produced it. If you do already bundle npm packages, the same function is exported as `applyWordfilters` from `@bitsocial/wordfilter-challenge`, with nothing from pkc-js behind it.
 
