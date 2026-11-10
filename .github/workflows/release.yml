@@ -6,6 +6,12 @@ on:
     types: ["completed"]
     branches: [master]
 
+# One release job at a time, so two CI runs finishing close together cannot bump, tag and publish over
+# each other.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -19,31 +25,55 @@ jobs:
           ref: master
           fetch-depth: 0
 
+      # The green CI run vouches for head_sha only. If master has moved past it (a push that landed while
+      # CI ran, or one CI never runs for because of the path filter or [skip ci]), releasing the tip would
+      # publish code no CI run tested. Skip instead: the newer commit's own CI success releases it, or
+      # the next push that runs CI does.
+      - name: Check master is the commit CI tested
+        id: tested
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          TIP=$(git rev-parse HEAD)
+          if [ "$TIP" = "$TESTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "master is at $TIP but CI tested $TESTED_SHA; not releasing untested code"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.tested.outputs.current == 'true'
         with:
           node-version: 22
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
+        if: steps.tested.outputs.current == 'true'
       - run: npm run build
+        if: steps.tested.outputs.current == 'true'
 
       - name: Set up Git author
+        if: steps.tested.outputs.current == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
       - name: Get current version
         id: before
+        if: steps.tested.outputs.current == 'true'
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Run release-it
+        if: steps.tested.outputs.current == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run release -- --ci || true
 
       - name: Check if released
         id: release
+        if: steps.tested.outputs.current == 'true'
         run: |
           AFTER=$(node -p "require('./package.json').version")
           if [ "${{ steps.before.outputs.version }}" != "$AFTER" ]; then
