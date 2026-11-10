@@ -319,7 +319,7 @@ An option has to be public when a client cannot satisfy the challenge without re
 - more than 64 rules, or a `src` or `dst` longer than 128 characters
 - `wordfilter/v1/fieldNames`, when set, unparseable, not an array of non-empty strings, containing a path whose first segment is not a publication type (`comment`, `vote`, `commentEdit`, `commentModeration`, `communityEdit`), or missing from `publicOptions`
 
-The `src === dst`, duplicate `src` and `dst`-contains-`src` checks all compare case-insensitively, because matching is case-insensitive: `{src: "LOL", dst: "lol"}` replaces nothing just as surely as `{src: "lol", dst: "lol"}` does.
+The `src === dst`, duplicate `src` and `dst`-contains-`src` checks all compare case-insensitively, because matching is case-insensitive: `{src: "LOL", dst: "lol"}` replaces nothing just as surely as `{src: "lol", dst: "lol"}` does. The `dst`-contains-`src` check uses the same matcher as the community check (see [Matching semantics](#matching-semantics)), so it rejects every `dst` in which the client's matcher finds a `src`. A rule set saved with 0.3.1 or earlier can fail that check now, such as `{src: "σ", dst: "ς"}`: `/σ/i` matches the final sigma `ς`, which `toLowerCase()` keeps apart from `σ`. pkc-js 0.0.96 reports it on every community start but keeps the community running, so until the owner edits the rule, the community rejects every post in which `/σ/i` finds a match, the client's own `ς` included.
 
 The `dst` containing `src` rule is what guarantees the client's loop terminates. Without it a rule like `lol` becomes `lolol` produces output that always contains a filtered word, making every post permanently unpublishable.
 
@@ -350,13 +350,13 @@ Clients written against 0.1.x need the same rename in whatever they copied from 
 ## Matching semantics
 
 - **Literal, never regex.** vichan supports arbitrary PCRE, but only because its config is a server-local file the operator wrote. Here the rules ship inside a signed record that every browser client downloads and executes, so patterns are literal strings.
-- **Case-insensitive**, following vichan's `str_ireplace`. `cloud`, `Cloud`, and `CLOUD` are all replaced. Casing is not preserved: all three become `butt`.
+- **Case-insensitive**, following vichan's `str_ireplace`. `cloud`, `Cloud`, and `CLOUD` are all replaced. Casing is not preserved: all three become `butt`. "Case-insensitive" means exactly what the client snippet's `new RegExp(escapeRegExp(src), "gi")` matches, and the community checks with that same expression rather than comparing `toLowerCase()` copies. The two fold some characters differently: `/i/i` does not match `İ` (U+0130) itself, while its lowercase form, `i` plus a combining dot, contains `i`, so a lowercase comparison would reject text the client's matcher leaves unchanged, on every retry.
 - **Cascading in array order**, and rules from multiple wordfilter challenges compose in challenge order.
 - **Absent fields pass cleanly.** A vote has no `content`, and that is not a failure. (`publication-match` treats a missing property as a failure, which would reject every vote. Do not copy that.)
 
 ## What this does not catch
 
-Deliberate evasion. `c l o u d`, `clοud` (with a Greek omicron), and zero-width-joined variants pass straight through.
+Deliberate evasion. `c l o u d`, `clοud` (with a Greek omicron), and zero-width-joined variants pass straight through, as do case variants the `i` flag does not fold, like the Kelvin sign `K` (U+212A) standing in for `k`.
 
 That is a hard limit, not an oversight. jschan has a `strictFiltering` mode that matches against NFD-stripped, zero-width-stripped and alphanumeric-only permutations of the post, and it is necessarily **detect-only**: normalisation is not invertible, so once you have matched a normalised form you no longer know where in the original text to splice a replacement. Evasion-resistant matching and replacement are mutually exclusive.
 

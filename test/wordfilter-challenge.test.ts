@@ -210,6 +210,36 @@ describe("getChallenge", () => {
     }
   });
 
+  // toLowerCase folds some characters the client's /src/gi does not: U+0130 lowercases to "i" plus a
+  // combining dot, U+1E9E to "ß", the Kelvin sign U+212A to "k". The client leaves these words alone,
+  // so a community comparing lowercased copies would reject its output on every retry.
+  it("accepts text the client's case-insensitive matcher leaves unchanged", async () => {
+    const rules: WordfilterRule[] = [
+      { src: "kiwi", dst: "fruit" },
+      { src: "straße", dst: "road" },
+      { src: "kayak", dst: "boat" }
+    ];
+    for (const content of ["KIWİ", "STRAẞE", "KAYAK"]) {
+      expect(applyWordfilters(content, rules)).toBe(content);
+      expect(await runWithRules({ content }, rules)).toEqual({ success: true });
+    }
+  });
+
+  // The other direction: /src/i also folds characters toLowerCase keeps apart, such as the micro sign
+  // U+00B5 against "μ", the final sigma U+03C2 against "σ" and the curled beta U+03D0 against "β". The
+  // client replaces these, so text that still contains one never went through the client's loop.
+  it("rejects text the client's case-insensitive matcher would still replace", async () => {
+    const rules: WordfilterRule[] = [
+      { src: "μ", dst: "mu" },
+      { src: "σ", dst: "s" },
+      { src: "β", dst: "b" }
+    ];
+    for (const content of ["µ", "ς", "ϐ"]) {
+      expect(applyWordfilters(content, rules)).not.toBe(content);
+      expect(await runWithRules({ content }, rules)).toEqual({ success: false, error: DEFAULT_ERROR });
+    }
+  });
+
   it("matches a filtered word inside a larger word", async () => {
     const result = await runWithRules({ content: "cloudflare" });
     expect(result).toEqual({ success: false, error: DEFAULT_ERROR });
@@ -618,6 +648,14 @@ describe("validateChallengeSettings", () => {
       buildSettings({ wordfilters: JSON.stringify([{ src: "lol", dst: "LOLOL" }]) }),
       /contains rule 0's src/
     );
+  });
+
+  // The client's /σ/gi matches the final sigma ς, though "ς".toLowerCase() does not contain "σ". The loop
+  // replaces ς with itself, calls that stable, and the community, matching the same way, rejects it.
+  it("rejects a dst the client's matcher finds a src in, even where toLowerCase does not", () => {
+    const rules: WordfilterRule[] = [{ src: "σ", dst: "ς" }];
+    expect(applyWordfilters("σ", rules)).toBe("ς");
+    expectRejected(buildSettings({ wordfilters: JSON.stringify(rules) }), /contains rule 0's src/);
   });
 
   it("rejects more than 64 rules", () => {

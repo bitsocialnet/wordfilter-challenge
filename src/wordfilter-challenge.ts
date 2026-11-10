@@ -8,10 +8,18 @@ import type {
 } from "./types.js";
 import {
   DEFAULT_FIELD_NAMES,
+  escapeRegExp,
   WORDFILTER_V1_FIELD_NAMES_OPTION,
   WORDFILTER_V1_RULES_OPTION,
   type WordfilterRule
 } from "./apply-wordfilters.js";
+
+// The one definition of "contains a filtered word": the literal, case-insensitive RegExp the client's
+// applyWordfilters replaces with. Comparing toLowerCase() copies instead folds case differently: /i/i
+// does not match "İ" (U+0130) itself, while its lowercase form, "i" plus U+0307, contains "i". Wherever
+// toLowerCase folds a character the regex does not, the community would reject text the client leaves
+// unchanged, on every retry.
+const containsSrc = (text: string, src: string): boolean => new RegExp(escapeRegExp(src), "i").test(text);
 
 const MAX_RULES = 64;
 const MAX_RULE_STRING_LENGTH = 128;
@@ -193,9 +201,8 @@ const getChallenge = async ({
       continue;
     }
 
-    const lowerCasedValue = value.toLowerCase();
     for (const rule of rules) {
-      if (lowerCasedValue.includes(rule.src.toLowerCase())) {
+      if (containsSrc(value, rule.src)) {
         return { success: false, error };
       }
     }
@@ -259,11 +266,12 @@ const validateChallengeSettings = ({
 
   // The rule that guarantees the client's replacement loop terminates. Without it a rule like
   // lol -> lolol produces output that always contains a filtered word, making every post permanently
-  // unpublishable. Cross-rule, because rule A's dst is fed to rule B on the next pass.
+  // unpublishable. Cross-rule, because rule A's dst is fed to rule B on the next pass. Same matcher as
+  // getChallenge and the client, so it catches every dst in which the client's matcher finds a src,
+  // including ones a toLowerCase comparison misses (σ -> ς).
   for (const [index, { dst }] of rules.entries()) {
-    const lowerCasedDst = dst.toLowerCase();
     for (const [otherIndex, { src }] of rules.entries()) {
-      if (lowerCasedDst.includes(src.toLowerCase())) {
+      if (containsSrc(dst, src)) {
         throw new Error(
           `${WORDFILTER_V1_RULES_OPTION}[${index}].dst ('${dst}') contains rule ${otherIndex}'s src ('${src}'): the replacement would itself be filtered, so no text could ever pass`
         );
