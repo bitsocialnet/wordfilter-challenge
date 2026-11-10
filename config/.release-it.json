@@ -2,12 +2,13 @@
   "git": {
     "requireCleanWorkingDir": false,
     "requireCommits": true,
+    "requireCommitsFail": false,
     "commit": false,
     "tagAnnotation": "v${version}",
     "tagName": "v${version}",
     "tagArgs": ["--force"],
     "push": true,
-    "pushArgs": ["--follow-tags"]
+    "pushArgs": ["--follow-tags", "--atomic"]
   },
   "npm": { "publish": false },
   "github": {
