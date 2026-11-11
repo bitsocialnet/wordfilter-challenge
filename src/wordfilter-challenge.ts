@@ -232,8 +232,6 @@ const validateChallengeSettings = ({
     throw new Error(`${WORDFILTER_V1_RULES_OPTION} has ${rules.length} rules, the maximum is ${MAX_RULES}`);
   }
 
-  const seenSources = new Map<string, number>();
-
   for (const [index, { src, dst }] of rules.entries()) {
     if (!src) {
       throw new Error(`${WORDFILTER_V1_RULES_OPTION}[${index}].src must not be empty`);
@@ -258,13 +256,18 @@ const validateChallengeSettings = ({
       throw new Error(`${WORDFILTER_V1_RULES_OPTION}[${index}].src and dst are both '${src}', which replaces nothing`);
     }
 
-    const firstIndex = seenSources.get(lowerCasedSrc);
-    if (firstIndex !== undefined) {
+    // Duplicates by the same matcher: an earlier src of the same length that the client's matcher finds in
+    // this one matches exactly the same text, so the two are the same rule, as "AB" and "ab" are.
+    // toLowerCase() would disagree both ways: /k/i does not match the Kelvin sign (U+212A), so k and U+212A
+    // are two rules, while /σ/i matches ς, so a ς rule after a σ rule is a duplicate.
+    const firstIndex = rules
+      .slice(0, index)
+      .findIndex((earlier) => earlier.src.length === src.length && containsSrc(src, earlier.src));
+    if (firstIndex !== -1) {
       throw new Error(
         `${WORDFILTER_V1_RULES_OPTION}[${index}].src ('${src}') is already the src of rule ${firstIndex}: the second rule can never match`
       );
     }
-    seenSources.set(lowerCasedSrc, index);
   }
 
   // The rule that guarantees the client's replacement loop terminates. Without it a rule like

@@ -640,6 +640,47 @@ describe("validateChallengeSettings", () => {
     );
   });
 
+  // Duplicates are decided by the client's matcher, not by toLowerCase(). /k/i does not match the Kelvin
+  // sign U+212A, and /straße/i does not match "STRAẞE" (U+1E9E), so each second rule replaces text the
+  // first one leaves alone.
+  it("accepts two srcs that lowercase alike where the client's matcher tells them apart", async () => {
+    for (const { rules, text } of [
+      {
+        rules: [
+          { src: "k", dst: "x" },
+          { src: "K", dst: "y" }
+        ],
+        text: "a k K b"
+      },
+      {
+        rules: [
+          { src: "straße", dst: "x" },
+          { src: "STRAẞE", dst: "y" }
+        ],
+        text: "a straße STRAẞE b"
+      }
+    ]) {
+      expectValid(buildSettings({ wordfilters: JSON.stringify(rules) }));
+      const content = applyWordfilters(text, rules);
+      expect(content).toBe("a x y b");
+      expect(await runWithRules({ content }, rules)).toEqual({ success: true });
+    }
+  });
+
+  // The reverse: /σ/i matches the final sigma ς, which toLowerCase() keeps apart from σ. The first rule
+  // already replaces every ς, so the second never matches.
+  it("rejects a src the client's matcher treats as an earlier one, even where toLowerCase does not", () => {
+    const rules: WordfilterRule[] = [
+      { src: "σ", dst: "x" },
+      { src: "ς", dst: "y" }
+    ];
+    expect(applyWordfilters("σ ς", rules)).toBe("x x");
+    expectRejected(
+      buildSettings({ wordfilters: JSON.stringify(rules) }),
+      /\[1\]\.src \('ς'\) is already the src of rule 0/
+    );
+  });
+
   it("rejects a dst containing its own src, the rule that keeps the client loop terminating", () => {
     expectRejected(
       buildSettings({ wordfilters: JSON.stringify([{ src: "lol", dst: "lolol" }]) }),
