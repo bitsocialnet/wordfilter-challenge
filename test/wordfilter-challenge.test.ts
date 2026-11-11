@@ -612,6 +612,22 @@ describe("validateChallengeSettings", () => {
     );
   });
 
+  // "straße" and "STRAẞE" (U+1E9E), or the Kelvin sign U+212A and "k", lowercase alike, but the client's
+  // /src/i does not match the dst. The client replaces the text and the community accepts the result, so
+  // the rule replaces something.
+  it("accepts a dst that lowercases like its src where the client's matcher tells them apart", async () => {
+    for (const rule of [
+      { src: "straße", dst: "STRAẞE" },
+      { src: "K", dst: "k" }
+    ]) {
+      const rules: WordfilterRule[] = [rule];
+      expectValid(buildSettings({ wordfilters: JSON.stringify(rules) }));
+      const content = applyWordfilters(`a ${rule.src} b`, rules);
+      expect(content).toBe(`a ${rule.dst} b`);
+      expect(await runWithRules({ content }, rules)).toEqual({ success: true });
+    }
+  });
+
   it("rejects the same src in more than one rule, case-insensitively", () => {
     expectRejected(
       buildSettings({

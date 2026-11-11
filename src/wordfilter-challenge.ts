@@ -249,9 +249,12 @@ const validateChallengeSettings = ({
       );
     }
 
-    // Matching is case-insensitive, so "AB" and "ab" are the same rule and the same no-op.
+    // Matching is case-insensitive, so "AB" and "ab" are the same rule and the same no-op. Lowercasing
+    // alike is not enough on its own: "straße" -> "STRAẞE" (U+1E9E) replaces real text, because the
+    // client's /straße/i does not match its dst. The dst-contains-src check below rejects every other dst
+    // the client's matcher finds a src in, such as σ -> ς.
     const lowerCasedSrc = src.toLowerCase();
-    if (lowerCasedSrc === dst.toLowerCase()) {
+    if (lowerCasedSrc === dst.toLowerCase() && containsSrc(dst, src)) {
       throw new Error(`${WORDFILTER_V1_RULES_OPTION}[${index}].src and dst are both '${src}', which replaces nothing`);
     }
 
