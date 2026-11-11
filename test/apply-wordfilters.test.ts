@@ -86,6 +86,17 @@ describe("applyWordfilters", () => {
     );
   });
 
+  it("returns a fixed point that the last allowed pass produced", () => {
+    // Each pass removes one level of nesting. Eight levels take all eight default passes, and the eighth
+    // leaves "", which is stable; a ninth level is genuinely more than the budget.
+    const rules: WordfilterRule[] = [{ src: "ab", dst: "" }];
+    expect(applyWordfilters("a".repeat(8) + "b".repeat(8), rules)).toBe("");
+    expect(applyWordfilters("aabb", rules, 2)).toBe("");
+    expect(() => applyWordfilters("a".repeat(9) + "b".repeat(9), rules)).toThrow(
+      "wordfilter rules did not stabilise"
+    );
+  });
+
   it("respects a custom maxPasses", () => {
     const cascading: WordfilterRule[] = [
       { src: "a", dst: "b" },

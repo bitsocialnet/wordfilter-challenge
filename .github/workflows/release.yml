@@ -6,6 +6,12 @@ on:
     types: ["completed"]
     branches: [master]
 
+# One release job at a time, so two CI runs finishing close together cannot bump, tag and publish over
+# each other.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -19,43 +25,78 @@ jobs:
           ref: master
           fetch-depth: 0
 
+      # The green CI run vouches for head_sha only. If master has moved past it (a push that landed while
+      # CI ran, or one CI never runs for because of the path filter or [skip ci]), releasing the tip would
+      # publish code no CI run tested. Skip instead: the newer commit's own CI success releases it, or
+      # the next push that runs CI does.
+      - name: Check master is the commit CI tested
+        id: tested
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          TIP=$(git rev-parse HEAD)
+          if [ "$TIP" = "$TESTED_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "master is at $TIP but CI tested $TESTED_SHA; not releasing untested code"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.tested.outputs.current == 'true'
         with:
           node-version: 22
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
+        if: steps.tested.outputs.current == 'true'
       - run: npm run build
+        if: steps.tested.outputs.current == 'true'
 
       - name: Set up Git author
+        if: steps.tested.outputs.current == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
       - name: Get current version
         id: before
+        if: steps.tested.outputs.current == 'true'
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Run release-it
+        if: steps.tested.outputs.current == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run release -- --ci || true
+        run: npm run release -- --ci
 
+      # A local package.json bump does not mean a release: release-it bumps and commits before it pushes,
+      # and a rejected push (master moved meanwhile) leaves the bump here with nothing on origin. Publish
+      # only when origin's tag for the new version is this commit; the push is atomic, so master got it
+      # too. This step runs even after release-it failed, so a failure past the push (creating the GitHub
+      # release, say) still publishes what was tagged; the failed step keeps the job red either way. A bump
+      # whose tag cannot be confirmed on origin, even after release-it succeeded (a failed ls-remote, say),
+      # fails this step, so a release that skipped npm never shows as green.
       - name: Check if released
         id: release
+        if: ${{ !cancelled() && steps.before.outcome == 'success' }}
         run: |
           AFTER=$(node -p "require('./package.json').version")
-          if [ "${{ steps.before.outputs.version }}" != "$AFTER" ]; then
+          if [ "${{ steps.before.outputs.version }}" = "$AFTER" ]; then
+            echo "No new version to release"
+            echo "released=false" >> $GITHUB_OUTPUT
+          elif [ "$(git ls-remote origin "refs/tags/v$AFTER^{}" | cut -f1)" = "$(git rev-parse HEAD)" ]; then
             echo "Released v$AFTER"
             echo "released=true" >> $GITHUB_OUTPUT
           else
-            echo "No new version to release"
+            echo "::error::v$AFTER was bumped locally but origin's v$AFTER tag is missing, points elsewhere or could not be read; not publishing it"
             echo "released=false" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
       - name: Publish to npm
-        if: steps.release.outputs.released == 'true'
+        if: ${{ !cancelled() && steps.release.outputs.released == 'true' }}
         # npm 12.0.0 fails `publish --provenance` with MODULE_NOT_FOUND for 'sigstore'
         # (packaging regression: the tarball no longer bundles it where libnpmpublish can
         # resolve it). Pin to npm 11 (trusted publishing needs >= 11.5.1) until npm 12 is fixed.

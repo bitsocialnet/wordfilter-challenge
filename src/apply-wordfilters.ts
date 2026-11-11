@@ -63,9 +63,11 @@ const applyOnce = (text: string, rules: readonly WordfilterRule[]): string =>
  * community still rejects. Stable output contains no filtered word by definition, which is exactly what
  * the community checks for.
  *
- * @throws if the rules never stabilise. `validateChallengeSettings` rejects the rule sets that can cause
- * this within one challenge (no `dst` may contain any `src`), so a single challenge configured through
- * pkc-js 0.0.85+ cannot produce one, but a client should still not spin forever on a hostile record.
+ * @throws if the output is still changing after `maxPasses` passes: rules whose replacements keep
+ * re-creating a `src`, or text nesting a filtered word more than `maxPasses` levels deep (nine `a`s then
+ * nine `b`s against `ab` -> `""`). `validateChallengeSettings` rejects a `dst` that itself contains a
+ * `src`, which removes direct self-matches but not rules whose replacements interact across match
+ * boundaries, and not deep nesting. The pass bound keeps a client from spinning forever either way.
  *
  * Two challenges on the same community can undo each other, which no per-challenge validator can see.
  * The README's client snippet merges the rules of every challenge covering a field into one call so the
@@ -83,5 +85,7 @@ export function applyWordfilters(
     if (next === out) return out;
     out = next;
   }
+  // The last pass may itself have produced the fixed point, which only one more pass can confirm.
+  if (applyOnce(out, rules) === out) return out;
   throw new Error("wordfilter rules did not stabilise");
 }
