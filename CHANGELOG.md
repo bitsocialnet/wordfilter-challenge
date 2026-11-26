@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.2](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.3.1...v0.3.2) (2026-11-26)
+
+### Bug Fixes
+
+* **deps:** upgrade @pkcprotocol/pkc-js 0.0.96 -> 0.0.163 ([#9](https://github.com/bitsocialnet/wordfilter-challenge/issues/9)) ([05a9c5b](https://github.com/bitsocialnet/wordfilter-challenge/commit/05a9c5b617dae2a90cfd005d000c02c8389fa117))
+
 ## [0.3.1](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.3.0...v0.3.1) (2026-10-18)
 
 ## [0.3.0](https://github.com/bitsocialnet/wordfilter-challenge/compare/v0.2.0...v0.3.0) (2026-08-22)
